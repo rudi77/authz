@@ -1,0 +1,38 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: authz
+      POSTGRES_USER: authz
+      POSTGRES_PASSWORD: authz
+    ports:
+      - "5432:5432"
+    volumes:
+      - authz_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authz -d authz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  authz:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      AUTHZ_DATABASE_URL: postgresql+psycopg://authz:authz@postgres:5432/authz
+      AUTHZ_API_KEYS: dev-key
+      AUTHZ_LOG_LEVEL: INFO
+      AUTHZ_AUDIT_ALL: "false"
+      AUTHZ_AUTO_PROVISION_USER: "true"
+    ports:
+      - "8080:8080"
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn authz_service.main:app --host 0.0.0.0 --port 8080"
+
+volumes:
+  authz_postgres_data:
