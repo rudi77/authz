@@ -30,6 +30,7 @@ from authz_service.dependencies import (
     get_authorization_engine,
     require_api_key,
 )
+from authz_service.observability import DECISION_LATENCY, record_decision
 
 
 router = APIRouter(prefix="/v1", tags=["authorize"])
@@ -55,22 +56,29 @@ def authorize(
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> AuthorizeResponseSchema:
-    decision = engine.authorize(
-        AuthorizeRequest(
-            tenant_id=request.tenant_id,
-            application_id=request.application_id,
-            subject=_to_subject(request.subject),
-            resource=request.resource,
-            action=request.action,
-            context=request.context,
+    with DECISION_LATENCY.labels("authorize").time():
+        decision = engine.authorize(
+            AuthorizeRequest(
+                tenant_id=request.tenant_id,
+                application_id=request.application_id,
+                subject=_to_subject(request.subject),
+                resource=request.resource,
+                action=request.action,
+                context=request.context,
+            )
         )
-    )
     response = AuthorizeResponseSchema(
         allowed=decision.allowed,
         decision=decision.decision,
         reason=decision.reason,
         required_permission=decision.required_permission,
         matched_permissions=sorted(decision.matched_permissions),
+    )
+    record_decision(
+        application_id=request.application_id,
+        subject_type=request.subject.type,
+        decision=decision.decision,
+        reason=decision.reason,
     )
     audit.write(
         AuditEntry(
@@ -102,15 +110,23 @@ def bulk_authorize(
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> BulkAuthorizeResponseSchema:
-    decisions = engine.bulk_authorize(
-        BulkAuthorizeRequest(
-            tenant_id=request.tenant_id,
-            application_id=request.application_id,
-            subject=_to_subject(request.subject),
-            checks=[(c.resource, c.action) for c in request.checks],
-            context=request.context,
+    with DECISION_LATENCY.labels("bulk-authorize").time():
+        decisions = engine.bulk_authorize(
+            BulkAuthorizeRequest(
+                tenant_id=request.tenant_id,
+                application_id=request.application_id,
+                subject=_to_subject(request.subject),
+                checks=[(c.resource, c.action) for c in request.checks],
+                context=request.context,
+            )
         )
-    )
+    for d in decisions:
+        record_decision(
+            application_id=request.application_id,
+            subject_type=request.subject.type,
+            decision=d.decision,
+            reason=d.reason,
+        )
     results = [
         BulkCheckResultSchema(
             resource=check.resource,

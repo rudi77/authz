@@ -19,7 +19,7 @@ agent runtimes, and tool guards remain the Policy Enforcement Points.
 
 ```
 authzkit/        Reusable Python core library
-  identity/      OIDC claim normalizers (Entra, Cognito, GCP, generic)
+  identity/      OIDC claim normalizers + JWT validator (Entra, Cognito, GCP, generic)
   tenancy/       Tenants, applications, users, memberships
   rbac/          Roles, permissions, AuthorizationEngine
   agents/        Agent context + AgentGuard
@@ -32,9 +32,14 @@ authzkit/        Reusable Python core library
 
 authz_service/   FastAPI Authorization Service
   api/           REST routers
+  middleware.py  Rate limit + idempotency middleware
+  observability.py  structlog, Prometheus, optional OTel
+  cli.py         `authz` CLI (schema, bootstrap, inspect)
   main.py        App factory + uvicorn entry point
 
-authz_sdk/       Python SDK (AuthzClient, agent_session helpers)
+authz_sdk/       Python SDK (AuthzClient + AuthzAdminClient + helpers)
+sdks/go/         Go SDK (AuthzClient + AdminClient + ToolGuard/MCPGuard)
+sdks/typescript/ TypeScript SDK (same surface, ESM, fetch-based)
 
 migrations/      Alembic migrations (Postgres)
 examples/        End-to-end usage demos
@@ -46,7 +51,23 @@ tests/           Unit + integration tests (pytest)
 ```bash
 pip install -e .[dev]
 python examples/contract_ai_agent.py    # in-memory end-to-end demo
-pytest                                    # 45 tests, ~3s
+pytest                                    # 69 tests, ~6s
+```
+
+## CLI
+
+```bash
+# 1. Migrate schema (Postgres)
+AUTHZ_DATABASE_URL=postgresql+psycopg://… authz schema upgrade
+
+# 2. Seed a tenant + application + roles from a YAML/JSON spec
+AUTHZ_BASE_URL=http://localhost:8080 AUTHZ_API_KEY=dev-key \
+    authz bootstrap --spec examples/bootstrap.example.yaml
+
+# 3. Sanity-check
+authz inspect health
+authz inspect decision --tenant-id … --application-id … \
+    --user-id … --resource contracts --action review
 ```
 
 ## Running the service

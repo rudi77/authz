@@ -14,3 +14,12 @@ __all__ = [
     "normalize_oidc",
     "normalize_principal",
 ]
+
+
+def __getattr__(name):
+    # Lazy-load JWT validator so the optional pyjwt dep stays optional.
+    if name in ("JWTValidator", "JWTValidatorConfig", "JWTValidationError"):
+        from authzkit.identity import jwt_validation as _jv
+
+        return getattr(_jv, name)
+    raise AttributeError(name)

@@ -1,13 +1,14 @@
 """HTTP client for the AuthZ Service.
 
-Provides a synchronous interface backed by httpx. Includes a small in-memory
-cache for ``effective_permissions`` because that's the hot path for agent
-runs (spec section 14).
+Provides a synchronous interface backed by httpx. Includes a small bounded
+LRU cache for ``effective_permissions`` because that's the hot path for
+agent runs (spec section 14).
 """
 
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -91,8 +92,11 @@ class AuthzClient:
         *,
         timeout: float = 5.0,
         cache_ttl_seconds: float = 0.0,
+        cache_max_entries: int = 1024,
         transport: httpx.BaseTransport | None = None,
         http_client: httpx.Client | None = None,
+        max_retries: int = 2,
+        retry_backoff_seconds: float = 0.1,
     ) -> None:
         if not base_url.endswith("/"):
             base_url = base_url + "/"
@@ -116,7 +120,10 @@ class AuthzClient:
             )
             self._owns_http = True
         self._cache_ttl = cache_ttl_seconds
-        self._cache: dict[tuple[str, str, str], _CacheEntry] = {}
+        self._cache_max_entries = cache_max_entries
+        self._cache: OrderedDict[tuple[str, str, str], _CacheEntry] = OrderedDict()
+        self._max_retries = max_retries
+        self._retry_backoff = retry_backoff_seconds
 
     def __enter__(self) -> "AuthzClient":
         return self
@@ -131,17 +138,69 @@ class AuthzClient:
     # ---- HTTP helper ---------------------------------------------------------
 
     def _post(self, path: str, body: dict) -> dict:
-        try:
-            response = self._http.post(path, json=body)
-        except httpx.HTTPError as e:
-            raise AuthzClientError(f"transport error: {e}") from e
-        if response.status_code >= 400:
+        attempts = 0
+        last_exc: Exception | None = None
+        while attempts <= self._max_retries:
             try:
-                detail = response.json()
-            except Exception:
-                detail = response.text
-            raise AuthzServiceError(response.status_code, detail)
-        return response.json()
+                response = self._http.post(path, json=body)
+            except httpx.HTTPError as e:
+                last_exc = e
+                attempts += 1
+                if attempts > self._max_retries:
+                    break
+                time.sleep(self._retry_backoff * (2 ** (attempts - 1)))
+                continue
+            if response.status_code >= 500 and attempts < self._max_retries:
+                # Transient server errors are retryable; client errors aren't.
+                attempts += 1
+                time.sleep(self._retry_backoff * (2 ** (attempts - 1)))
+                continue
+            if response.status_code >= 400:
+                try:
+                    detail = response.json()
+                except Exception:
+                    detail = response.text
+                raise AuthzServiceError(response.status_code, detail)
+            return response.json()
+        raise AuthzClientError(f"transport error after retries: {last_exc}")
+
+    # ---- Cache helpers -------------------------------------------------------
+
+    def _cache_get(self, key: tuple[str, str, str]) -> set[str] | None:
+        entry = self._cache.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= time.monotonic():
+            self._cache.pop(key, None)
+            return None
+        # LRU bookkeeping.
+        self._cache.move_to_end(key)
+        return set(entry.permissions)
+
+    def _cache_put(self, key: tuple[str, str, str], permissions: set[str]) -> None:
+        self._cache[key] = _CacheEntry(
+            permissions=set(permissions),
+            expires_at=time.monotonic() + self._cache_ttl,
+        )
+        self._cache.move_to_end(key)
+        while len(self._cache) > self._cache_max_entries:
+            self._cache.popitem(last=False)
+
+    def cache_invalidate(
+        self, *, tenant_id: str | None = None, application_id: str | None = None
+    ) -> None:
+        """Drop cached entries matching the given partition keys.
+
+        Useful when admins update memberships and a long-running agent
+        runtime needs its cached set refreshed.
+        """
+        keys = list(self._cache.keys())
+        for k in keys:
+            t, a, _ = k
+            if (tenant_id is None or t == tenant_id) and (
+                application_id is None or a == application_id
+            ):
+                self._cache.pop(k, None)
 
     # ---- API methods ---------------------------------------------------------
 
@@ -258,9 +317,9 @@ class AuthzClient:
             f"{subject.type}:{subject.user_id}:{subject.agent_id}",
         )
         if self._cache_ttl > 0 and not bypass_cache:
-            entry = self._cache.get(cache_key)
-            if entry and entry.expires_at > time.monotonic():
-                return set(entry.permissions)
+            cached = self._cache_get(cache_key)
+            if cached is not None:
+                return cached
         body = {
             "tenant_id": tenant_id,
             "application_id": application_id,
@@ -269,8 +328,5 @@ class AuthzClient:
         data = self._post("v1/effective-permissions", body)
         permissions = set(data.get("permissions") or [])
         if self._cache_ttl > 0:
-            self._cache[cache_key] = _CacheEntry(
-                permissions=set(permissions),
-                expires_at=time.monotonic() + self._cache_ttl,
-            )
+            self._cache_put(cache_key, permissions)
         return permissions

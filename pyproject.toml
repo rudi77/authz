@@ -20,6 +20,8 @@ dependencies = [
     "httpx>=0.27",
     "python-jose[cryptography]>=3.3",
     "structlog>=24.1",
+    "prometheus-client>=0.20",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -31,9 +33,16 @@ dev = [
     "mypy>=1.8",
 ]
 redis = ["redis>=5.0"]
+otel = [
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-instrumentation-fastapi>=0.45b0",
+    "opentelemetry-instrumentation-sqlalchemy>=0.45b0",
+]
 
 [project.scripts]
 authz-service = "authz_service.main:run"
+authz = "authz_service.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

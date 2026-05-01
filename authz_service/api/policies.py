@@ -84,20 +84,28 @@ def create_membership(
     dependencies=[Depends(require_api_key)],
 )
 def list_memberships(
-    tenant_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
+    tenant_id: str,
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    page: int = 1,
+    page_size: int = 50,
 ) -> list[MembershipOut]:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    # This is a simple admin endpoint; for a production system it would
-    # paginate. Acceptable for the MVP given the audit scope.
     from sqlalchemy import select
 
     from authzkit.storage import orm
+    from authz_service.middleware import paginate_params
+
+    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    offset, limit = paginate_params(page, page_size)
 
     with store.session() as s:
         rows = s.scalars(
-            select(orm.Membership).where(orm.Membership.tenant_id == tenant.id)
+            select(orm.Membership)
+            .where(orm.Membership.tenant_id == tenant.id)
+            .order_by(orm.Membership.created_at)
+            .offset(offset)
+            .limit(limit)
         ).all()
         out: list[MembershipOut] = []
         for r in rows:

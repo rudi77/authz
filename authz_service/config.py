@@ -6,6 +6,11 @@ import os
 from dataclasses import dataclass, field
 
 
+def _csv_env(key: str, default: str = "") -> tuple[str, ...]:
+    raw = os.environ.get(key, default)
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str = field(
@@ -13,11 +18,7 @@ class Settings:
             "AUTHZ_DATABASE_URL", "sqlite+pysqlite:///./authz.db"
         )
     )
-    api_keys: tuple[str, ...] = field(
-        default_factory=lambda: tuple(
-            k for k in os.environ.get("AUTHZ_API_KEYS", "").split(",") if k
-        )
-    )
+    api_keys: tuple[str, ...] = field(default_factory=lambda: _csv_env("AUTHZ_API_KEYS"))
     log_level: str = field(default_factory=lambda: os.environ.get("AUTHZ_LOG_LEVEL", "INFO"))
     audit_all_decisions: bool = field(
         default_factory=lambda: os.environ.get("AUTHZ_AUDIT_ALL", "false").lower() == "true"
@@ -29,6 +30,21 @@ class Settings:
     auto_provision_tenant: bool = field(
         default_factory=lambda: os.environ.get("AUTHZ_AUTO_PROVISION_TENANT", "false").lower()
         == "true"
+    )
+    cors_allow_origins: tuple[str, ...] = field(
+        default_factory=lambda: _csv_env("AUTHZ_CORS_ORIGINS", "*")
+    )
+    rate_limit_per_minute: int = field(
+        default_factory=lambda: int(os.environ.get("AUTHZ_RATE_LIMIT_PER_MINUTE", "0"))
+    )
+    auto_create_schema: bool = field(
+        default_factory=lambda: os.environ.get(
+            "AUTHZ_AUTO_CREATE_SCHEMA",
+            # Default: yes for SQLite (dev/test), no for everything else (prod
+            # must use Alembic — single source of truth).
+            "auto",
+        ).lower()
+        in ("true", "1", "yes")
     )
 
 
@@ -46,3 +62,18 @@ def override_settings(settings: Settings) -> None:
     """Test hook to swap settings."""
     global _settings
     _settings = settings
+
+
+def should_auto_create_schema(settings: Settings) -> bool:
+    """Resolve the auto-create-schema decision.
+
+    Explicit env override wins. Otherwise: SQLite (in-memory or file) gets
+    auto-create because Alembic isn't typically used there; everything else
+    defers to Alembic and refuses to silently mutate the schema.
+    """
+    raw = os.environ.get("AUTHZ_AUTO_CREATE_SCHEMA", "auto").lower()
+    if raw in ("true", "1", "yes"):
+        return True
+    if raw in ("false", "0", "no"):
+        return False
+    return settings.database_url.startswith("sqlite")

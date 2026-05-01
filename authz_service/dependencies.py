@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
@@ -11,9 +12,10 @@ from authzkit.audit.logger import AuditEntry
 from authzkit.policies.engine import PolicyEngine
 from authzkit.rbac.checker import AuthorizationEngine
 from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url, init_schema
-from authz_service.config import Settings, get_settings
+from authz_service.config import Settings, get_settings, should_auto_create_schema
 
 
+_log = logging.getLogger("authz")
 _engine: Engine | None = None
 _store: SqlAlchemyStore | None = None
 
@@ -22,8 +24,17 @@ def get_engine(settings: Annotated[Settings, Depends(get_settings)]) -> Engine:
     global _engine
     if _engine is None:
         _engine = create_engine_from_url(settings.database_url)
-        # Auto-init schema in dev/test. Production uses Alembic migrations.
-        init_schema(_engine)
+        if should_auto_create_schema(settings):
+            # Single source of truth: Alembic in production. Auto-create only
+            # when the URL says "this is a dev/test DB" or the operator
+            # explicitly opted in via AUTHZ_AUTO_CREATE_SCHEMA=true.
+            _log.info("auto-creating schema (sqlite or AUTHZ_AUTO_CREATE_SCHEMA=true)")
+            init_schema(_engine)
+        else:
+            _log.info(
+                "schema auto-creation disabled; ensure 'alembic upgrade head' has run "
+                "or set AUTHZ_AUTO_CREATE_SCHEMA=true"
+            )
     return _engine
 
 
