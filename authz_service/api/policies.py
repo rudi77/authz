@@ -101,7 +101,7 @@ def list_memberships(
         ).all()
         out: list[MembershipOut] = []
         for r in rows:
-            names = store._membership_role_names(s, r.id)
+            names = store.membership_role_names(s, r.id)
             out.append(
                 MembershipOut(
                     id=r.id,
@@ -140,7 +140,7 @@ def update_membership(
         store.set_membership_roles(membership_id, set(body.roles))
     with store.session() as s:
         row = s.get(orm.Membership, membership_id)
-        names = store._membership_role_names(s, row.id)
+        names = store.membership_role_names(s, row.id)
     return MembershipOut(
         id=row.id,
         tenant_id=row.tenant_id,

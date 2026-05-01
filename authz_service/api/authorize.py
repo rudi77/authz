@@ -121,7 +121,7 @@ def bulk_authorize(
         for check, decision in zip(request.checks, decisions, strict=True)
     ]
     # Each individual decision audited so denies can be queried per resource.
-    for check, decision in zip(request.checks, decisions, strict=True):
+    for check, decision, result in zip(request.checks, decisions, results, strict=True):
         audit.write(
             AuditEntry(
                 decision=decision.decision,
@@ -133,7 +133,7 @@ def bulk_authorize(
                 user_id=request.subject.user_id,
                 agent_id=request.subject.agent_id,
                 request=request.model_dump(),
-                response=decision.__dict__ | {"matched_permissions": list(decision.matched_permissions)},
+                response=result.model_dump(),
                 request_id=request_id,
             ),
             request_id=request_id,

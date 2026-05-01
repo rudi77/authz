@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Iterable
 
-from sqlalchemy import Engine, create_engine, delete, select
+from sqlalchemy import Engine, create_engine, delete, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from authzkit.agents.models import Agent as AgentModel
@@ -292,7 +292,7 @@ class SqlAlchemyStore:
 
     # ---- Memberships ---------------------------------------------------------
 
-    def _membership_role_names(self, s: Session, membership_id: str) -> list[str]:
+    def membership_role_names(self, s: Session, membership_id: str) -> list[str]:
         rows = s.execute(
             select(orm.Role.name)
             .join(orm.membership_roles, orm.membership_roles.c.role_id == orm.Role.id)
@@ -332,7 +332,7 @@ class SqlAlchemyStore:
                         )
                     )
             s.commit()
-            names = self._membership_role_names(s, row.id)
+            names = self.membership_role_names(s, row.id)
             return self._to_membership(row, names)
 
     def get_membership(
@@ -350,7 +350,7 @@ class SqlAlchemyStore:
             row = s.scalar(stmt)
             if row is None:
                 return None
-            names = self._membership_role_names(s, row.id)
+            names = self.membership_role_names(s, row.id)
             return self._to_membership(row, names)
 
     def list_memberships_for_user(self, user_id: str) -> list[MembershipModel]:
@@ -358,7 +358,7 @@ class SqlAlchemyStore:
             rows = s.scalars(
                 select(orm.Membership).where(orm.Membership.user_id == user_id)
             ).all()
-            return [self._to_membership(r, self._membership_role_names(s, r.id)) for r in rows]
+            return [self._to_membership(r, self.membership_role_names(s, r.id)) for r in rows]
 
     def set_membership_roles(self, membership_id: str, role_names: set[str]) -> None:
         with self.session() as s:
@@ -522,24 +522,38 @@ class SqlAlchemyStore:
         self, *, tenant_id: str, application_id: str, user_id: str
     ) -> set[str]:
         with self.session() as s:
-            # Pull memberships scoped to this app and tenant-wide; either may
-            # carry roles that grant permissions for this application.
+            # Eligible memberships: app-scoped for this app OR tenant-wide.
+            # Memberships in *other* apps must not contribute permissions
+            # to this app — that would cross application isolation.
             membership_rows = s.scalars(
                 select(orm.Membership).where(
                     orm.Membership.tenant_id == tenant_id,
                     orm.Membership.user_id == user_id,
                     orm.Membership.status == MEMBERSHIP_STATUS_ACTIVE,
+                    or_(
+                        orm.Membership.application_id == application_id,
+                        orm.Membership.application_id.is_(None),
+                    ),
                 )
             ).all()
             ids = [m.id for m in membership_rows]
             if not ids:
                 return set()
+            # Restrict permissions to those scoped to this app (or unscoped
+            # platform permissions). A tenant-wide membership might carry a
+            # platform role; its permissions still need to be relevant here.
             rows = s.execute(
                 select(orm.Permission.name)
                 .join(orm.role_permissions, orm.role_permissions.c.permission_id == orm.Permission.id)
                 .join(orm.Role, orm.Role.id == orm.role_permissions.c.role_id)
                 .join(orm.membership_roles, orm.membership_roles.c.role_id == orm.Role.id)
-                .where(orm.membership_roles.c.membership_id.in_(ids))
+                .where(
+                    orm.membership_roles.c.membership_id.in_(ids),
+                    or_(
+                        orm.Permission.application_id == application_id,
+                        orm.Permission.application_id.is_(None),
+                    ),
+                )
             ).all()
             return {r[0] for r in rows}
 

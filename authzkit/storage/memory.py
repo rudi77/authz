@@ -299,19 +299,24 @@ class InMemoryStore:
     def resolve_user_permissions(
         self, *, tenant_id: str, application_id: str, user_id: str
     ) -> set[str]:
-        membership = self.get_membership(
-            tenant_id=tenant_id, application_id=application_id, user_id=user_id
-        )
-        if membership is None:
-            membership = self.get_membership(
-                tenant_id=tenant_id, application_id=None, user_id=user_id
-            )
-        if membership is None:
-            return set()
+        # Union of (app-scoped for this app) ∪ (tenant-wide) memberships.
+        # Memberships in other apps must not contribute — that would cross
+        # application isolation. Permissions from each membership are also
+        # filtered to those scoped to this app or unscoped platform perms.
+        candidates = [
+            m
+            for m in self.memberships.values()
+            if m.tenant_id == tenant_id
+            and m.user_id == user_id
+            and m.status == MEMBERSHIP_STATUS_ACTIVE
+            and (m.application_id == application_id or m.application_id is None)
+        ]
         permissions: set[str] = set()
-        for role_id in self.membership_roles.get(membership.id, set()):
-            for p in self.list_role_permissions(role_id):
-                permissions.add(p.name)
+        for m in candidates:
+            for role_id in self.membership_roles.get(m.id, set()):
+                for p in self.list_role_permissions(role_id):
+                    if p.application_id in (application_id, None):
+                        permissions.add(p.name)
         return permissions
 
     def resolve_agent_permissions(
