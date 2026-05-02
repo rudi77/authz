@@ -6,9 +6,6 @@ Skipped when pyyaml is unavailable; the CLI uses YAML for the spec.
 from __future__ import annotations
 
 import json
-import subprocess
-import sys
-import textwrap
 from pathlib import Path
 
 import pytest
@@ -16,7 +13,6 @@ from fastapi.testclient import TestClient
 
 from authz_service.config import Settings, override_settings
 from authz_service.dependencies import reset_engine
-
 
 pytest.importorskip("yaml")
 
@@ -72,8 +68,8 @@ def test_bootstrap_against_in_process_app(running_app, tmp_path: Path, monkeypat
     # Run the CLI's bootstrap in-process (avoids spawning a subprocess that
     # would need an actual server). We swap the AuthzAdminClient's HTTP
     # transport to the TestClient.
-    from authz_service import cli
     from authz_sdk.admin import AuthzAdminClient
+    from authz_service import cli
 
     monkeypatch.setattr(
         cli, "_admin_client", lambda args: AuthzAdminClient(
@@ -90,7 +86,7 @@ def test_bootstrap_against_in_process_app(running_app, tmp_path: Path, monkeypat
         "/v1/tenants/boot", headers={"X-API-Key": "k1"}
     ).json()
     assert tenant["slug"] == "boot"
-    permissions = running_app.get(
+    running_app.get(
         f"/v1/applications/{tenant['id']}/permissions",
         headers={"X-API-Key": "k1"},
     )

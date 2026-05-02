@@ -131,7 +131,7 @@ class AuthzAdminClient:
             self._http = httpx.Client(base_url=base_url, timeout=timeout, headers=headers)
             self._owns_http = True
 
-    def __enter__(self) -> "AuthzAdminClient":
+    def __enter__(self) -> AuthzAdminClient:
         return self
 
     def __exit__(self, *exc: Any) -> None:

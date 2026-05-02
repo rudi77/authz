@@ -14,11 +14,6 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from authzkit.identity.base import IdentityPrincipal
-from authzkit.rbac.resolver import PermissionResolver
-from authzkit.security.invitations import InvitationError, InvitationService
-from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authzkit.tenancy.resolver import TenantContextResolver
 from authz_service.config import Settings, get_settings
 from authz_service.dependencies import (
     get_invitation_service,
@@ -26,7 +21,8 @@ from authz_service.dependencies import (
     require_admin_scope,
     require_api_key,
 )
-
+from authzkit.security.invitations import InvitationError, InvitationService
+from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["invitations"])
 
@@ -166,7 +162,7 @@ def accept_invitation(
     try:
         record = invitations.accept(token, accepting_user_id=user.id)
     except InvitationError as e:
-        raise HTTPException(status_code=400, detail={"reason": e.reason})
+        raise HTTPException(status_code=400, detail={"reason": e.reason}) from e
     return InvitationOut(
         id=record.id,
         tenant_id=record.tenant_id,

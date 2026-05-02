@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from authz_service.config import Settings, override_settings
 from authz_service.dependencies import reset_engine
-
 
 HEADERS = {"X-API-Key": "k1"}
 
@@ -81,8 +80,8 @@ def test_create_and_accept_invitation_creates_membership(client: TestClient):
     assert response.json()["status"] == "accepted"
 
     # Verify membership exists by hitting authorize.
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     store = SqlAlchemyStore(create_engine_from_url(get_settings().database_url))
     user = store.find_user_by_external_identity(
@@ -119,9 +118,9 @@ def test_invalid_token_rejected(client: TestClient):
 
 
 def test_expired_invitation_rejected(client: TestClient, temp_db_url):
+    from authz_service.config import get_settings
     from authzkit.security.invitations import InvitationService
     from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
-    from authz_service.config import get_settings
 
     tenant, app = _seed(client)
     store = SqlAlchemyStore(create_engine_from_url(get_settings().database_url))

@@ -7,10 +7,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from authz_service.dependencies import get_store, require_admin_scope
 from authzkit.rbac.models import RoleScope
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_admin_scope
-
 
 router = APIRouter(prefix="/v1", tags=["roles"])
 
@@ -57,8 +56,10 @@ def create_role(
     app = _resolve_application(application_id, store)
     try:
         scope = RoleScope(body.scope)
-    except ValueError:
-        raise HTTPException(status_code=400, detail={"reason": "invalid_scope"})
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail={"reason": "invalid_scope"}
+        ) from exc
     role = store.create_role(
         name=body.name,
         scope=scope,

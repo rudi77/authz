@@ -11,9 +11,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authz_service.dependencies import get_store, require_admin_scope
-
+from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["memberships"])
 
@@ -91,8 +90,8 @@ def list_memberships(
 ) -> list[MembershipOut]:
     from sqlalchemy import select
 
-    from authzkit.storage import orm
     from authz_service.middleware import paginate_params
+    from authzkit.storage import orm
 
     tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
     if tenant is None:
@@ -133,7 +132,6 @@ def update_membership(
     body: MembershipPatch,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> MembershipOut:
-    from sqlalchemy import select
 
     from authzkit.storage import orm
 

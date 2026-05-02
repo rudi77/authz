@@ -8,12 +8,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authzkit.security.api_keys import ApiKeyMaterial, ApiKeyService
 from authz_service.dependencies import (
     get_api_key_service,
     require_admin_scope,
 )
-
+from authzkit.security.api_keys import ApiKeyMaterial, ApiKeyService
 
 router = APIRouter(prefix="/v1/api-keys", tags=["api-keys"])
 
@@ -113,8 +112,10 @@ def rotate_api_key(
 ) -> ApiKeyCreated:
     try:
         material = keys.rotate(key_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail={"reason": "api_key_not_found"})
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404, detail={"reason": "api_key_not_found"}
+        ) from exc
     return _to_out(material)
 
 

@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from authzkit.audit.logger import AuditEntry
+from authz_service.audit_retention import prune_audit_log
 from authzkit.storage import orm
 from authzkit.storage.sqlalchemy import (
     SqlAlchemyStore,
     create_engine_from_url,
     init_schema,
 )
-from authz_service.audit_retention import prune_audit_log
 
 
 @pytest.fixture()
@@ -24,7 +23,7 @@ def store(temp_db_url) -> SqlAlchemyStore:
 
 
 def _seed_old_and_new_rows(store: SqlAlchemyStore) -> None:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     with store.session() as s:
         # One fresh row.

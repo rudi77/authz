@@ -19,6 +19,7 @@ from typing import Annotated
 from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy import Engine
 
+from authz_service.config import Settings, get_settings, should_auto_create_schema
 from authzkit.audit.logger import AuditEntry
 from authzkit.policies.engine import PolicyEngine
 from authzkit.rbac.checker import AuthorizationEngine
@@ -31,8 +32,6 @@ from authzkit.security.api_keys import (
 )
 from authzkit.security.invitations import InvitationService
 from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url, init_schema
-from authz_service.config import Settings, get_settings, should_auto_create_schema
-
 
 _log = logging.getLogger("authz")
 _engine: Engine | None = None
@@ -162,24 +161,23 @@ def require_api_key(
     the lookup.
     """
     candidate = _extract_key(authorization, x_api_key)
-    if not settings.api_keys:
-        # Dev mode: if no env keys *and* no DB keys, accept any caller. As
-        # soon as a single DB key is provisioned the service flips to
-        # enforcing mode regardless of env config.
-        if not _has_any_db_key(api_keys):
-            stub = ApiKeyRecord(
-                id="dev",
-                name="dev-mode",
-                key_prefix="dev",
-                scopes=(SCOPE_ADMIN,),
-                tenant_id=None,
-                status="active",
-                expires_at=None,
-                last_used_at=None,
-                rotates=None,
-            )
-            request.state.api_key = stub
-            return stub
+    # Dev mode: if no env keys *and* no DB keys, accept any caller. As soon as
+    # a single DB key is provisioned the service flips to enforcing mode
+    # regardless of env config.
+    if not settings.api_keys and not _has_any_db_key(api_keys):
+        stub = ApiKeyRecord(
+            id="dev",
+            name="dev-mode",
+            key_prefix="dev",
+            scopes=(SCOPE_ADMIN,),
+            tenant_id=None,
+            status="active",
+            expires_at=None,
+            last_used_at=None,
+            rotates=None,
+        )
+        request.state.api_key = stub
+        return stub
     record = _resolve_api_key(candidate, settings, api_keys)
     if record is None:
         raise HTTPException(

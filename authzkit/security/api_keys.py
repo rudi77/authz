@@ -9,9 +9,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Iterable
+from datetime import UTC, datetime
 
 SCOPE_ADMIN = "admin"
 SCOPE_RUNTIME = "runtime"
@@ -136,10 +136,10 @@ class ApiKeyService:
                 # SQLite drops tzinfo on round-trip; treat naive as UTC.
                 expires = row.expires_at
                 if expires.tzinfo is None:
-                    expires = expires.replace(tzinfo=timezone.utc)
-                if expires < datetime.now(timezone.utc):
+                    expires = expires.replace(tzinfo=UTC)
+                if expires < datetime.now(UTC):
                     return None
-            row.last_used_at = datetime.now(timezone.utc)
+            row.last_used_at = datetime.now(UTC)
             s.commit()
             return self._to_record(row)
 
@@ -224,6 +224,4 @@ def scope_allows(
         return True
     if surface == "runtime" and SCOPE_RUNTIME in scopes_set:
         return True
-    if tenant_id is not None and f"tenant:{tenant_id}" in scopes_set:
-        return True
-    return False
+    return bool(tenant_id is not None and f"tenant:{tenant_id}" in scopes_set)

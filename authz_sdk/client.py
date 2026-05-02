@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import time
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -125,7 +125,7 @@ class AuthzClient:
         self._max_retries = max_retries
         self._retry_backoff = retry_backoff_seconds
 
-    def __enter__(self) -> "AuthzClient":
+    def __enter__(self) -> AuthzClient:
         return self
 
     def __exit__(self, *exc: Any) -> None:

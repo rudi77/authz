@@ -39,7 +39,7 @@ class PolicyEngine:
     def add_rule(self, rule: PolicyRule) -> None:
         self.rules.append(rule)
 
-    def evaluate(self, request: "AuthorizeRequest", _matched: set[str]) -> bool:
+    def evaluate(self, request: AuthorizeRequest, _matched: set[str]) -> bool:
         if not self.rules:
             return True
 
@@ -71,13 +71,11 @@ class PolicyEngine:
                 return False
         return True
 
-    def _matches_target(self, rule: PolicyRule, request: "AuthorizeRequest") -> bool:
+    def _matches_target(self, rule: PolicyRule, request: AuthorizeRequest) -> bool:
         if rule.tenant_id is not None and rule.tenant_id != request.tenant_id:
             return False
         if rule.application_id is not None and rule.application_id != request.application_id:
             return False
         if rule.resource != "*" and rule.resource != request.resource:
             return False
-        if rule.action != "*" and rule.action != request.action:
-            return False
-        return True
+        return not (rule.action != "*" and rule.action != request.action)

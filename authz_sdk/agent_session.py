@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from authz_sdk.client import AuthzClient, Subject
 from authzkit.agents.guard import AgentGuard
 from authzkit.agents.models import AgentContext
-from authz_sdk.client import AuthzClient, Subject
 
 
 def start_agent_session(

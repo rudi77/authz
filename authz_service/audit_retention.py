@@ -14,15 +14,13 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from sqlalchemy import delete
 
 from authzkit.storage import orm
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-
 
 _log = logging.getLogger("authz.retention")
 
@@ -36,7 +34,7 @@ def prune_audit_log(store: SqlAlchemyStore, *, retention_days: int) -> int:
     """
     if retention_days <= 0:
         return 0
-    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff = datetime.now(UTC) - timedelta(days=retention_days)
     with store.session() as s:
         result = s.execute(
             delete(orm.AuditLog).where(orm.AuditLog.created_at < cutoff)

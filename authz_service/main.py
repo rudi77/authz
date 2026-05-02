@@ -24,7 +24,7 @@ from authz_service.api.roles import router as roles_router
 from authz_service.api.tenants import router as tenants_router
 from authz_service.audit_retention import AuditRetentionWorker
 from authz_service.config import get_settings
-from authz_service.dependencies import get_engine, get_store
+from authz_service.dependencies import get_engine
 from authz_service.middleware import (
     IdempotencyMiddleware,
     RateLimitMiddleware,
@@ -38,7 +38,6 @@ from authz_service.observability import (
     instrument_fastapi,
     render_metrics,
 )
-
 
 _ADMIN_UI_DIR = Path(__file__).parent / "ui"
 

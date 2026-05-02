@@ -59,12 +59,12 @@ class AuthorizeDecision:
     @classmethod
     def allow(
         cls, required: str, matched: frozenset[str] | set[str] | None = None
-    ) -> "AuthorizeDecision":
+    ) -> AuthorizeDecision:
         m = frozenset(matched or {required})
         return cls(True, "allow", "permission_granted", required, m)
 
     @classmethod
-    def deny(cls, reason: str, required: str) -> "AuthorizeDecision":
+    def deny(cls, reason: str, required: str) -> AuthorizeDecision:
         return cls(False, "deny", reason, required, frozenset())
 
 
@@ -107,10 +107,7 @@ class AuthorizationEngine:
         # An explicit empty mask configured for a tenant must use the sentinel
         # permission set that's still non-empty; we treat None-equivalent as
         # "no mask configured."
-        if tenant_permissions:
-            effective = permissions & tenant_permissions
-        else:
-            effective = permissions
+        effective = permissions & tenant_permissions if tenant_permissions else permissions
 
         if required not in effective:
             # Disambiguate: was it a tenant-feature mask, or just missing perm?
@@ -160,10 +157,7 @@ class AuthorizationEngine:
         tenant_permissions = self.repository.resolve_tenant_permissions(
             tenant_id=request.tenant_id, application_id=request.application_id
         )
-        if tenant_permissions:
-            effective = subject_perms & tenant_permissions
-        else:
-            effective = subject_perms
+        effective = subject_perms & tenant_permissions if tenant_permissions else subject_perms
 
         results: list[AuthorizeDecision] = []
         for resource, action in request.checks:

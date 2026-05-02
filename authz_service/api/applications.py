@@ -7,9 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authz_service.dependencies import get_store, require_admin_scope
-
+from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1/applications", tags=["applications"])
 

@@ -16,9 +16,9 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from datetime import UTC, datetime, timedelta
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ def _hash_token(plaintext: str) -> str:
 def _to_aware(dt: datetime) -> datetime:
     """SQLite drops tzinfo on round-trip — treat naive datetimes as UTC."""
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -72,7 +72,7 @@ class InvitationService:
 
         plaintext = secrets.token_urlsafe(32)
         token_hash = _hash_token(plaintext)
-        expires_at = datetime.now(timezone.utc) + ttl
+        expires_at = datetime.now(UTC) + ttl
         with self.store.session() as s:
             row = orm.Invitation(
                 tenant_id=tenant_id,
@@ -107,7 +107,7 @@ class InvitationService:
                 raise InvitationError("invalid_token")
             if row.status != "pending":
                 raise InvitationError("invitation_not_pending")
-            if _to_aware(row.expires_at) < datetime.now(timezone.utc):
+            if _to_aware(row.expires_at) < datetime.now(UTC):
                 row.status = "expired"
                 s.commit()
                 raise InvitationError("invitation_expired")
@@ -131,7 +131,7 @@ class InvitationService:
             )
             assert row is not None
             row.status = "accepted"
-            row.accepted_at = datetime.now(timezone.utc)
+            row.accepted_at = datetime.now(UTC)
             row.accepted_by_user_id = accepting_user_id
             s.commit()
             return self._to_record(row)

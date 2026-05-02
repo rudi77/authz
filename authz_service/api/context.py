@@ -6,6 +6,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from authz_service.config import Settings, get_settings
+from authz_service.dependencies import get_store, require_api_key
 from authzkit.exceptions import (
     InvalidRequestError,
     NoActiveMembershipError,
@@ -16,9 +18,6 @@ from authzkit.rbac.resolver import PermissionResolver
 from authzkit.service.schemas import ResolveContextRequestSchema, ResolveContextResponseSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.resolver import TenantContextResolver
-from authz_service.config import Settings, get_settings
-from authz_service.dependencies import get_store, require_api_key
-
 
 router = APIRouter(prefix="/v1", tags=["context"])
 
@@ -54,12 +53,14 @@ def resolve_context(
             explicit_tenant_id=request.explicit_tenant_id,
         )
     except (TenantNotActiveError, NoActiveMembershipError) as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"reason": exc.reason})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail={"reason": exc.reason}
+        ) from exc
     except InvalidRequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"reason": exc.reason, "message": str(exc)},
-        )
+        ) from exc
     return ResolveContextResponseSchema(
         tenant_id=ctx.tenant_id,
         application_id=ctx.application_id,

@@ -40,7 +40,7 @@ def test_create_and_get_tenant(admin: AuthzAdminClient):
 
 
 def test_full_provisioning_flow(admin: AuthzAdminClient):
-    tenant = admin.create_tenant(slug="t1", name="T1")
+    admin.create_tenant(slug="t1", name="T1")
     app = admin.create_application(slug="a1", name="A1")
     admin.create_permission(app.id, name="docs.read")
     admin.create_permission(app.id, name="docs.write")
@@ -67,8 +67,8 @@ def test_list_memberships_pagination(admin: AuthzAdminClient):
     admin.create_permission(app.id, name="x.y")
     admin.upsert_role_with_permissions(app.id, name="reader", permissions=["x.y"])
 
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     store = SqlAlchemyStore(create_engine_from_url(get_settings().database_url))
     user_ids = []

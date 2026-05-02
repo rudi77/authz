@@ -7,6 +7,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header
 
+from authz_service.dependencies import (
+    AuditSink,
+    get_audit_sink,
+    get_authorization_engine,
+    require_api_key,
+)
+from authz_service.observability import DECISION_LATENCY, record_decision
 from authzkit.audit.logger import AuditEntry
 from authzkit.rbac.checker import (
     AuthorizationEngine,
@@ -24,14 +31,6 @@ from authzkit.service.schemas import (
     EffectivePermissionsResponseSchema,
     SubjectSchema,
 )
-from authz_service.dependencies import (
-    AuditSink,
-    get_audit_sink,
-    get_authorization_engine,
-    require_api_key,
-)
-from authz_service.observability import DECISION_LATENCY, record_decision
-
 
 router = APIRouter(prefix="/v1", tags=["authorize"])
 

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import time
-
 import httpx
-import pytest
 
 from authz_sdk.client import AuthzClient, Subject
 

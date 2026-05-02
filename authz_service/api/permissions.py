@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
-from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_admin_scope
 from authz_service.api.roles import _resolve_application
-
+from authz_service.dependencies import get_store, require_admin_scope
+from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1/applications", tags=["permissions"])
 

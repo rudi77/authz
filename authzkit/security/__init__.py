@@ -1,11 +1,11 @@
 """Security primitives: API keys, invitations."""
 
 from authzkit.security.api_keys import (
+    SCOPE_ADMIN,
+    SCOPE_RUNTIME,
     ApiKeyMaterial,
     ApiKeyRecord,
     ApiKeyService,
-    SCOPE_ADMIN,
-    SCOPE_RUNTIME,
     scope_allows,
 )
 from authzkit.security.invitations import (

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Iterable
+from collections.abc import Iterable
+from typing import Any
 
 from sqlalchemy import Engine, create_engine, delete, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -16,11 +17,23 @@ from authzkit.rbac.models import RoleScope
 from authzkit.storage import orm
 from authzkit.tenancy.models import (
     MEMBERSHIP_STATUS_ACTIVE,
+)
+from authzkit.tenancy.models import (
     Application as ApplicationModel,
+)
+from authzkit.tenancy.models import (
     ExternalIdentity as ExternalIdentityModel,
+)
+from authzkit.tenancy.models import (
     Membership as MembershipModel,
+)
+from authzkit.tenancy.models import (
     Tenant as TenantModel,
+)
+from authzkit.tenancy.models import (
     TenantIdentityMapping as TenantIdentityMappingModel,
+)
+from authzkit.tenancy.models import (
     User as UserModel,
 )
 
