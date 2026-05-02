@@ -295,6 +295,27 @@ pytest tests/unit -q   # core library only (no DB)
 The integration tests use `fastapi.testclient.TestClient` driving the SDK in
 process, so no external services are needed.
 
+## Documentation
+
+In-depth docs live in [`docs/`](docs/index.md):
+
+- [Concepts](docs/concepts.md) — model, decision algorithm, reason codes
+- [Getting Started](docs/getting-started.md) — install + first decision
+- [Identity & JWT](docs/identity.md) — IdP normalization, validation
+- [RBAC](docs/rbac.md) — roles, permissions, memberships
+- [Agents](docs/agents.md) — `user ∩ agent` intersection rule
+- [Tools & MCP](docs/tools-and-mcp.md) — `ToolGuard`, `MCPGuard`
+- [ABAC Policies](docs/policies.md) — declarative condition DSL
+- [Service & Deployment](docs/service.md) — endpoints, env vars, CLI
+- [Python SDK](docs/sdk-python.md) — `AuthzClient`, `AuthzAdminClient`
+- [API Keys](docs/api-keys.md) — scopes, rotation, dev mode
+- [Operations](docs/operations.md) — schema, audit, observability, runbook
+- [Architecture](docs/architecture.md) — layers, protocols, dependencies
+
+End-to-end runnable examples live in [`examples/`](examples/README.md);
+all ten 0X-numbered scripts are self-contained and use the in-memory
+store unless they explicitly demonstrate persistence.
+
 ## License
 
 Apache-2.0
