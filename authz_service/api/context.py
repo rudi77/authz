@@ -6,6 +6,12 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from authz_service.config import Settings, get_settings
+from authz_service.dependencies import (
+    enforce_tenant_scope_binding,
+    get_store,
+    require_runtime_scope,
+)
 from authzkit.exceptions import (
     InvalidRequestError,
     NoActiveMembershipError,
@@ -13,12 +19,10 @@ from authzkit.exceptions import (
 )
 from authzkit.identity.base import IdentityPrincipal
 from authzkit.rbac.resolver import PermissionResolver
+from authzkit.security.api_keys import ApiKeyRecord
 from authzkit.service.schemas import ResolveContextRequestSchema, ResolveContextResponseSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.resolver import TenantContextResolver
-from authz_service.config import Settings, get_settings
-from authz_service.dependencies import get_store, require_api_key
-
 
 router = APIRouter(prefix="/v1", tags=["context"])
 
@@ -26,12 +30,12 @@ router = APIRouter(prefix="/v1", tags=["context"])
 @router.post(
     "/resolve-context",
     response_model=ResolveContextResponseSchema,
-    dependencies=[Depends(require_api_key)],
 )
 def resolve_context(
     request: ResolveContextRequestSchema,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     settings: Annotated[Settings, Depends(get_settings)],
+    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
 ) -> ResolveContextResponseSchema:
     principal = IdentityPrincipal(
         provider=request.provider,
@@ -54,12 +58,18 @@ def resolve_context(
             explicit_tenant_id=request.explicit_tenant_id,
         )
     except (TenantNotActiveError, NoActiveMembershipError) as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"reason": exc.reason})
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail={"reason": exc.reason}
+        ) from exc
     except InvalidRequestError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"reason": exc.reason, "message": str(exc)},
-        )
+        ) from exc
+    # Once the principal resolves to a concrete tenant, enforce per-key
+    # tenant binding so a tenant-scoped key can't probe other tenants by
+    # supplying claims that resolve elsewhere.
+    enforce_tenant_scope_binding(api_key, ctx.tenant_id)
     return ResolveContextResponseSchema(
         tenant_id=ctx.tenant_id,
         application_id=ctx.application_id,

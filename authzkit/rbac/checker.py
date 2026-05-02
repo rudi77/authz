@@ -59,12 +59,12 @@ class AuthorizeDecision:
     @classmethod
     def allow(
         cls, required: str, matched: frozenset[str] | set[str] | None = None
-    ) -> "AuthorizeDecision":
+    ) -> AuthorizeDecision:
         m = frozenset(matched or {required})
         return cls(True, "allow", "permission_granted", required, m)
 
     @classmethod
-    def deny(cls, reason: str, required: str) -> "AuthorizeDecision":
+    def deny(cls, reason: str, required: str) -> AuthorizeDecision:
         return cls(False, "deny", reason, required, frozenset())
 
 
@@ -107,10 +107,7 @@ class AuthorizationEngine:
         # An explicit empty mask configured for a tenant must use the sentinel
         # permission set that's still non-empty; we treat None-equivalent as
         # "no mask configured."
-        if tenant_permissions:
-            effective = permissions & tenant_permissions
-        else:
-            effective = permissions
+        effective = permissions & tenant_permissions if tenant_permissions else permissions
 
         if required not in effective:
             # Disambiguate: was it a tenant-feature mask, or just missing perm?
@@ -128,19 +125,94 @@ class AuthorizationEngine:
         return AuthorizeDecision.allow(required, {required})
 
     def bulk_authorize(self, request: BulkAuthorizeRequest) -> list[AuthorizeDecision]:
-        return [
-            self.authorize(
-                AuthorizeRequest(
-                    tenant_id=request.tenant_id,
-                    application_id=request.application_id,
-                    subject=request.subject,
-                    resource=resource,
-                    action=action,
-                    context=request.context,
+        """Evaluate many checks against the same subject in one pass.
+
+        Resolves the subject's permission set *once* and reuses it for every
+        check. Drops the per-check from O(N) DB queries to O(1) for the hot
+        path where an agent runtime asks "which of these N tools can I call?".
+        """
+        # Tenant + application activity: single check up front. If either is
+        # inactive, every result is the same deny reason.
+        if not self.repository.is_tenant_active(request.tenant_id):
+            return [
+                AuthorizeDecision.deny("tenant_not_active", f"{r}.{a}")
+                for r, a in request.checks
+            ]
+        if not self.repository.is_application_active(request.application_id):
+            return [
+                AuthorizeDecision.deny("application_not_active", f"{r}.{a}")
+                for r, a in request.checks
+            ]
+
+        # Resolve the subject's permission set once.
+        subject_perms = self._subject_permissions_or_deny(request.subject, request)
+        if isinstance(subject_perms, AuthorizeDecision):
+            # Subject-level deny (e.g. inactive membership). Spread the same
+            # reason across every check so callers get a uniform response shape.
+            return [
+                AuthorizeDecision.deny(subject_perms.reason, f"{r}.{a}")
+                for r, a in request.checks
+            ]
+
+        tenant_permissions = self.repository.resolve_tenant_permissions(
+            tenant_id=request.tenant_id, application_id=request.application_id
+        )
+        effective = subject_perms & tenant_permissions if tenant_permissions else subject_perms
+
+        results: list[AuthorizeDecision] = []
+        for resource, action in request.checks:
+            required = f"{resource}.{action}"
+            if required in effective:
+                # Per-check ABAC still needs to run because conditions can
+                # depend on resource attributes.
+                if not self.policy_engine.evaluate(
+                    AuthorizeRequest(
+                        tenant_id=request.tenant_id,
+                        application_id=request.application_id,
+                        subject=request.subject,
+                        resource=resource,
+                        action=action,
+                        context=request.context,
+                    ),
+                    effective,
+                ):
+                    results.append(
+                        AuthorizeDecision.deny("policy_condition_failed", required)
+                    )
+                    continue
+                results.append(AuthorizeDecision.allow(required, {required}))
+                continue
+
+            if (
+                tenant_permissions
+                and required in subject_perms
+                and required not in tenant_permissions
+            ):
+                results.append(
+                    AuthorizeDecision.deny("tenant_feature_disabled", required)
                 )
-            )
-            for resource, action in request.checks
-        ]
+            else:
+                results.append(AuthorizeDecision.deny("missing_permission", required))
+        return results
+
+    def _subject_permissions_or_deny(
+        self, subject: Subject, request: BulkAuthorizeRequest
+    ) -> set[str] | AuthorizeDecision:
+        """Resolve the bare permission set for a subject without tenant masking."""
+        marker = AuthorizeRequest(
+            tenant_id=request.tenant_id,
+            application_id=request.application_id,
+            subject=subject,
+            resource="_bulk",
+            action="_marker",
+        )
+        if subject.type == SUBJECT_USER:
+            result = self._resolve_user(marker)
+        elif subject.type == SUBJECT_AGENT:
+            result = self._resolve_agent(marker)
+        else:
+            return AuthorizeDecision.deny("invalid_subject", "_bulk._marker")
+        return result
 
     def effective_permissions(
         self, *, tenant_id: str, application_id: str, subject: Subject

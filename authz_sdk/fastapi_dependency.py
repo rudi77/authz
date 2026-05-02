@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Callable
+from collections.abc import Callable
 
 try:
     from fastapi import Depends, HTTPException, status
 except ImportError:  # pragma: no cover
     Depends = HTTPException = status = None  # type: ignore[assignment]
 
-from authzkit.exceptions import PermissionDeniedError
 from authz_sdk.client import AuthzClient, Subject
+from authzkit.exceptions import PermissionDeniedError
 
 
 def require_permission(
@@ -44,6 +44,6 @@ def require_permission(
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail={"reason": "missing_permission", "permission": e.permission},
-            )
+            ) from e
 
     return _enforce

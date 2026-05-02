@@ -104,8 +104,8 @@ def test_resolve_context_creates_user_and_returns_permissions(client: TestClient
     assert response.status_code == 404
 
     # Get the auto-provisioned user_id from the database.
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     engine = create_engine_from_url(get_settings().database_url)
     store = SqlAlchemyStore(engine)
@@ -148,8 +148,8 @@ def test_resolve_context_creates_user_and_returns_permissions(client: TestClient
 def test_authorize_allow_and_deny(client: TestClient):
     tenant, app, _ = _seed_basic(client)
     # Provision user + membership directly.
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     engine = create_engine_from_url(get_settings().database_url)
     store = SqlAlchemyStore(engine)
@@ -207,8 +207,8 @@ def test_authorize_allow_and_deny(client: TestClient):
 
 def test_bulk_authorize(client: TestClient):
     tenant, app, _ = _seed_basic(client)
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     engine = create_engine_from_url(get_settings().database_url)
     store = SqlAlchemyStore(engine)
@@ -246,8 +246,8 @@ def test_bulk_authorize(client: TestClient):
 
 def test_effective_permissions_endpoint(client: TestClient):
     tenant, app, _ = _seed_basic(client)
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     engine = create_engine_from_url(get_settings().database_url)
     store = SqlAlchemyStore(engine)
@@ -293,8 +293,8 @@ def test_agent_authorization_respects_intersection(client: TestClient):
         headers=HEADERS,
     )
     # User + membership.
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     engine = create_engine_from_url(get_settings().database_url)
     store = SqlAlchemyStore(engine)

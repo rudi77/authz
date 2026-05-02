@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 
@@ -20,7 +20,7 @@ class AuditEntry:
     request: dict[str, Any] = field(default_factory=dict)
     response: dict[str, Any] = field(default_factory=dict)
     request_id: str | None = None
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 class AuditLogger(Protocol):

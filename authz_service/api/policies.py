@@ -11,9 +11,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from authz_service.dependencies import get_store, require_admin_scope
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_api_key
-
 
 router = APIRouter(prefix="/v1", tags=["memberships"])
 
@@ -43,7 +42,7 @@ class MembershipPatch(BaseModel):
     "/tenants/{tenant_id}/memberships",
     response_model=MembershipOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_membership(
     tenant_id: str,
@@ -81,23 +80,31 @@ def create_membership(
 @router.get(
     "/tenants/{tenant_id}/memberships",
     response_model=list[MembershipOut],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def list_memberships(
-    tenant_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
+    tenant_id: str,
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    page: int = 1,
+    page_size: int = 50,
 ) -> list[MembershipOut]:
+    from sqlalchemy import select
+
+    from authz_service.middleware import paginate_params
+    from authzkit.storage import orm
+
     tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
     if tenant is None:
         raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    # This is a simple admin endpoint; for a production system it would
-    # paginate. Acceptable for the MVP given the audit scope.
-    from sqlalchemy import select
-
-    from authzkit.storage import orm
+    offset, limit = paginate_params(page, page_size)
 
     with store.session() as s:
         rows = s.scalars(
-            select(orm.Membership).where(orm.Membership.tenant_id == tenant.id)
+            select(orm.Membership)
+            .where(orm.Membership.tenant_id == tenant.id)
+            .order_by(orm.Membership.created_at)
+            .offset(offset)
+            .limit(limit)
         ).all()
         out: list[MembershipOut] = []
         for r in rows:
@@ -118,14 +125,13 @@ def list_memberships(
 @router.patch(
     "/memberships/{membership_id}",
     response_model=MembershipOut,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def update_membership(
     membership_id: str,
     body: MembershipPatch,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> MembershipOut:
-    from sqlalchemy import select
 
     from authzkit.storage import orm
 

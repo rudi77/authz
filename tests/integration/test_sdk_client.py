@@ -7,9 +7,9 @@ from fastapi.testclient import TestClient
 
 from authz_sdk import AuthzClient, BulkCheck, MCPGuard, Subject, ToolGuard
 from authz_sdk.agent_session import start_agent_session
-from authzkit.exceptions import PermissionDeniedError
 from authz_service.config import Settings, override_settings
 from authz_service.dependencies import reset_engine
+from authzkit.exceptions import PermissionDeniedError
 
 
 @pytest.fixture()
@@ -73,8 +73,8 @@ def _seed(sdk_client: AuthzClient):
         },
     )
 
-    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
     from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
 
     store = SqlAlchemyStore(create_engine_from_url(get_settings().database_url))
     user, _ = store.upsert_user_from_identity(

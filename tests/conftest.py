@@ -6,6 +6,7 @@ against that DB via an env-var override.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import tempfile
 from collections.abc import Iterator
@@ -19,7 +20,5 @@ def temp_db_url() -> Iterator[str]:
     os.close(fd)
     url = f"sqlite+pysqlite:///{path}"
     yield url
-    try:
+    with contextlib.suppress(FileNotFoundError):
         os.unlink(path)
-    except FileNotFoundError:
-        pass

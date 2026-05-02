@@ -7,9 +7,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from authz_service.dependencies import get_store, require_admin_scope
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_api_key
-
 
 router = APIRouter(prefix="/v1/applications", tags=["applications"])
 
@@ -31,7 +30,7 @@ class ApplicationOut(BaseModel):
     "",
     response_model=ApplicationOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_application(
     body: ApplicationIn, store: Annotated[SqlAlchemyStore, Depends(get_store)]
@@ -41,7 +40,7 @@ def create_application(
 
 
 @router.get(
-    "/{application_id}", response_model=ApplicationOut, dependencies=[Depends(require_api_key)]
+    "/{application_id}", response_model=ApplicationOut, dependencies=[Depends(require_admin_scope)]
 )
 def get_application(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]

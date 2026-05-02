@@ -1,0 +1,63 @@
+# Example AuthZ bootstrap spec.
+#
+# Usage:
+#   AUTHZ_BASE_URL=http://localhost:8080 AUTHZ_API_KEY=dev-key \
+#       authz bootstrap --spec examples/bootstrap.example.yaml
+#
+# Idempotent: re-running keeps existing tenants / applications and replaces
+# role->permission mappings declaratively.
+
+tenant:
+  slug: acme
+  name: ACME Inc.
+  mappings:
+    - provider: azure_entra
+      issuer: https://login.microsoftonline.com/<tenant-id>/v2.0
+      external_tenant_id: <azure-tenant-id>
+  feature_flags:
+    github_mcp_enabled: true
+    gmail_tools_enabled: true
+
+application:
+  slug: contract-ai
+  name: Contract AI
+  permissions:
+    - contracts.read
+    - contracts.review
+    - contracts.classify
+    - contracts.approve
+    - mcp.github.read_repo
+    - mcp.github.create_issue
+    - tools.gmail.read
+    - tools.gmail.send
+  roles:
+    - name: legal_reviewer
+      scope: application
+      permissions:
+        - contracts.read
+        - contracts.review
+        - mcp.github.read_repo
+    - name: contract_manager
+      scope: application
+      permissions:
+        - contracts.read
+        - contracts.review
+        - contracts.approve
+        - tools.gmail.send
+    - name: contract_analysis_agent
+      scope: agent
+      permissions:
+        - contracts.read
+        - contracts.classify
+        - mcp.github.read_repo
+        - mcp.github.create_issue
+
+agents:
+  - name: Contract Analyzer
+    role: contract_analysis_agent
+
+# Memberships are commented out by default — production setups usually
+# create them via invitations / SCIM rather than at bootstrap time.
+# memberships:
+#   - user_id: <internal-user-id>
+#     roles: [legal_reviewer]

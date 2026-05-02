@@ -36,7 +36,7 @@ class Permission:
         *,
         id: str | None = None,
         application_id: str | None = None,
-    ) -> "Permission":
+    ) -> Permission:
         if "." not in name:
             raise ValueError(f"permission name must contain '.': {name}")
         # The action is always the trailing segment; everything to its left is
