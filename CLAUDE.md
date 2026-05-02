@@ -8,7 +8,7 @@ Python (run from repo root):
 
 ```bash
 pip install -e .[dev]                # install package + dev tooling
-pytest -q                            # full suite (~92 tests, SQLite, no external deps)
+pytest -q                            # full suite (~111 tests, SQLite, no external deps)
 pytest tests/unit -q                 # core library only, no DB
 pytest tests/integration/test_api_keys.py::test_rotate -q   # single test
 pytest --cov=authzkit --cov=authz_service --cov=authz_sdk

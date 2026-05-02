@@ -40,9 +40,12 @@ class Settings:
     )
     # Explicit opt-in for permissive behaviour (no API keys → accept any
     # caller, CORS=* allowed). Without this flag the service is fail-closed.
+    # The parser is intentionally strict (only literal ``true`` enables
+    # dev mode) so a typo like ``AUTHZ_DEV_MODE=enabled`` falls back to
+    # the safe default.
     dev_mode: bool = field(
         default_factory=lambda: os.environ.get("AUTHZ_DEV_MODE", "false").lower()
-        in ("true", "1", "yes")
+        == "true"
     )
     rate_limit_per_minute: int = field(
         default_factory=lambda: int(os.environ.get("AUTHZ_RATE_LIMIT_PER_MINUTE", "0"))

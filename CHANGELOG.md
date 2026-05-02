@@ -24,7 +24,7 @@ Closes the most production-hostile defaults that survived v0.2.
   cleared on tab close) instead of `localStorage`. A "Remember in
   this browser" checkbox restores the old behaviour. A persistent
   banner explains the trade-off and points to `SECURITY.md`.
-- README + docs: corrected test counts (92 Python, 7 Go, 8 TS) and
+- README + docs: corrected test counts (111 Python, 7 Go, 8 TS) and
   updated all references to the dev-mode behaviour.
 
 ### Migration
@@ -96,7 +96,7 @@ gaps. Five themes:
 
 ### Tests
 
-- 92 Python tests (was 50 in v0.1; +42 covering API keys, invitations,
+- 111 Python tests (was 50 in v0.1; +61 covering API keys, invitations,
   audit retention, Redis backends, scope enforcement, security
   hardening).
 - 7 Go tests, 8 TypeScript tests — unchanged.

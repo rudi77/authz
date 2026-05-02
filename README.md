@@ -20,7 +20,7 @@ agent runtimes, and tool guards remain the Policy Enforcement Points.
 ## Status
 
 **v0.2 — pilot-ready.** Core decision engine is correct and well-tested
-(92 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
+(111 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
 multi-process state, audit retention, observability, container hardening,
 fail-closed defaults) are in. Customer-readiness gaps remaining:
 load-tested production deployment, SCIM, gRPC API, ReBAC, full admin
@@ -71,7 +71,7 @@ tests/           Unit + integration tests (pytest)
 ```bash
 pip install -e .[dev]
 python examples/contract_ai_agent.py    # in-memory end-to-end demo
-pytest                                    # 92 tests, ~8s
+pytest                                    # 111 tests, ~12s
 ```
 
 ## CLI
@@ -305,7 +305,7 @@ storage, no tool execution, no admin UI in MVP.
 ## Testing
 
 ```bash
-pytest -q              # runs all 92 tests in <8s using SQLite
+pytest -q              # runs all 111 tests in ~12s using SQLite
 pytest tests/unit -q   # core library only (no DB)
 ```
 

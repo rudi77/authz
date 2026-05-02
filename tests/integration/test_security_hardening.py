@@ -163,3 +163,42 @@ def test_cors_empty_origins_without_dev_mode_starts(make_client):
     """The new default — empty CORS origins — must always start."""
     client = make_client(cors_allow_origins=(), dev_mode=False, api_keys=("k",))
     assert client.get("/healthz").status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# AUTHZ_DEV_MODE env-var parsing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Truthy: only the literal "true" (case-insensitive) flips the bit.
+        ("true", True),
+        ("TRUE", True),
+        ("True", True),
+        # Falsy / fail-closed defaults.
+        ("false", False),
+        ("", False),
+        # Anything that isn't exactly "true" must stay False so a typo can't
+        # accidentally enable dev mode.
+        ("1", False),
+        ("yes", False),
+        ("on", False),
+        ("enabled", False),
+        ("treu", False),  # typo
+        ("True ", False),  # trailing whitespace, not stripped
+    ],
+)
+def test_dev_mode_env_parser_is_strict(monkeypatch, raw, expected):
+    from authz_service.config import Settings
+
+    monkeypatch.setenv("AUTHZ_DEV_MODE", raw)
+    assert Settings().dev_mode is expected
+
+
+def test_dev_mode_env_parser_unset_defaults_to_false(monkeypatch):
+    from authz_service.config import Settings
+
+    monkeypatch.delenv("AUTHZ_DEV_MODE", raising=False)
+    assert Settings().dev_mode is False
