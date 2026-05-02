@@ -31,8 +31,18 @@ class Settings:
         default_factory=lambda: os.environ.get("AUTHZ_AUTO_PROVISION_TENANT", "false").lower()
         == "true"
     )
+    # Default empty: production must opt-in to specific origins. The legacy
+    # `*` default was permissive in a way that surprises operators promoting
+    # a dev image to production. `*` is still allowed but only when paired
+    # with AUTHZ_DEV_MODE=true (enforced at app startup).
     cors_allow_origins: tuple[str, ...] = field(
-        default_factory=lambda: _csv_env("AUTHZ_CORS_ORIGINS", "*")
+        default_factory=lambda: _csv_env("AUTHZ_CORS_ORIGINS", "")
+    )
+    # Explicit opt-in for permissive behaviour (no API keys → accept any
+    # caller, CORS=* allowed). Without this flag the service is fail-closed.
+    dev_mode: bool = field(
+        default_factory=lambda: os.environ.get("AUTHZ_DEV_MODE", "false").lower()
+        in ("true", "1", "yes")
     )
     rate_limit_per_minute: int = field(
         default_factory=lambda: int(os.environ.get("AUTHZ_RATE_LIMIT_PER_MINUTE", "0"))

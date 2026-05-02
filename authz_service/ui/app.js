@@ -1,16 +1,43 @@
 // Minimal admin SPA. No build step, no framework — just fetch + DOM.
 //
-// The API key lives in localStorage so a refresh doesn't lose it. All API
-// calls flow through one ``api`` helper that injects the X-API-Key header.
+// API key handling: by default the key lives in sessionStorage (cleared
+// when the tab closes) so a stray XSS payload from another origin can't
+// scrape a long-lived credential. The user can opt into localStorage via
+// the "Remember" checkbox; we mirror that choice across reloads.
 
 const STORAGE_KEY = "authz.adminKey";
-let apiKey = localStorage.getItem(STORAGE_KEY) || "";
+const REMEMBER_KEY = "authz.rememberKey";
 
-document.getElementById("api-key").value = apiKey;
+const remembered = localStorage.getItem(REMEMBER_KEY) === "true";
+let apiKey =
+  (remembered ? localStorage.getItem(STORAGE_KEY) : sessionStorage.getItem(STORAGE_KEY)) || "";
+
+const apiKeyInput = document.getElementById("api-key");
+const rememberCheckbox = document.getElementById("remember-key");
+apiKeyInput.value = apiKey;
+rememberCheckbox.checked = remembered;
+
+function persistKey(value, remember) {
+  if (remember) {
+    localStorage.setItem(STORAGE_KEY, value);
+    localStorage.setItem(REMEMBER_KEY, "true");
+    sessionStorage.removeItem(STORAGE_KEY);
+  } else {
+    sessionStorage.setItem(STORAGE_KEY, value);
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(REMEMBER_KEY);
+  }
+}
+
 document.getElementById("save-key").addEventListener("click", () => {
-  apiKey = document.getElementById("api-key").value.trim();
-  localStorage.setItem(STORAGE_KEY, apiKey);
+  apiKey = apiKeyInput.value.trim();
+  persistKey(apiKey, rememberCheckbox.checked);
   refreshAll();
+});
+
+rememberCheckbox.addEventListener("change", () => {
+  // Re-persist the current value into the storage the user just chose.
+  if (apiKey) persistKey(apiKey, rememberCheckbox.checked);
 });
 
 document.querySelectorAll(".tab").forEach((tab) => {

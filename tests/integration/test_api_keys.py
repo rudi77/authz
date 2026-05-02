@@ -19,7 +19,7 @@ def make_client(temp_db_url):
             audit_all_decisions=False,
             auto_provision_user=True,
             auto_provision_tenant=False,
-            cors_allow_origins=("*",),
+            cors_allow_origins=(),
             rate_limit_per_minute=0,
         )
         defaults.update(overrides)

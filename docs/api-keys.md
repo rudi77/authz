@@ -16,10 +16,16 @@ DB lookup wins when both succeed. Once any active DB-backed key
 exists, the service is in **locked-down mode** — every request must
 present a key that matches one of the two sources.
 
-When neither source has any keys, the service starts in **dev mode**
-and accepts every caller. A `WARNING` is logged at startup. The first
-DB-backed key you create flips out of dev mode automatically; there is
-no flag to toggle.
+When neither source has any keys, the service is **fail-closed by
+default**: every request returns `401 missing_or_invalid_api_key`.
+
+To opt into the legacy "accept any caller" behaviour for local
+development, set `AUTHZ_DEV_MODE=true`. The service then accepts
+every request as a synthetic `dev-mode` admin and logs a loud
+`WARNING` at startup. The first DB-backed key you create still
+flips the service back into enforcing mode automatically, even if
+`AUTHZ_DEV_MODE` is left on. **Never set `AUTHZ_DEV_MODE=true` in
+production.**
 
 ## Scopes
 
