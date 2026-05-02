@@ -90,8 +90,11 @@ model. Two key sources:
 
 DB lookup wins when both succeed. The first DB-backed key activates
 the lookup path; before then, the env list is the only source. If
-neither has any keys, the service starts in **dev mode** and accepts
-every caller (with a `WARNING` log line at startup).
+neither has any keys, the service is **fail-closed** by default —
+every request returns `401 missing_or_invalid_api_key`. To opt into
+the legacy "accept every caller" behaviour for local hacking, set
+`AUTHZ_DEV_MODE=true`; this is logged loudly at startup and is never
+appropriate in production.
 
 ## Environment variables
 
@@ -109,7 +112,8 @@ every caller (with a `WARNING` log line at startup).
 | `AUTHZ_AUTO_PROVISION_TENANT` | `false` | Self-service tenant creation. |
 | `AUTHZ_AUTO_CREATE_SCHEMA` | `auto` | `true` / `false` / `auto`. Auto = SQLite only. |
 | `AUTHZ_OTEL_ENABLED` | `false` | Initialize OpenTelemetry exporters. |
-| `AUTHZ_CORS_ORIGINS` | `*` | Comma-separated origins. |
+| `AUTHZ_CORS_ORIGINS` | *(empty)* | Comma-separated origins. `*` is rejected at startup unless `AUTHZ_DEV_MODE=true`. |
+| `AUTHZ_DEV_MODE` | `false` | Opt-in permissive flag: allows the no-keys-accepts-all behaviour and `AUTHZ_CORS_ORIGINS=*`. Never set in production. |
 
 Dot-notation `auto` resolves: SQLite → auto-create, anything else →
 defer to Alembic. The service refuses to silently `CREATE TABLE`
@@ -199,7 +203,14 @@ Re-runs are safe; the CLI reconciles the existing state declaratively.
 A vanilla-HTML SPA is served at `/admin` when the asset directory is
 present (it's bundled in the Docker image). It uses the same REST API,
 so anything the UI does, your scripts can do too. Set your API key in
-the top bar; it's stored in `localStorage`.
+the top bar; by default it lives in `sessionStorage` (cleared on tab
+close). Tick **Remember in this browser** to persist it in
+`localStorage` instead — XSS-sensitive, so prefer the per-tab default.
+
+The admin UI is a developer tool, not a hardened admin console. For
+non-development use, place `/admin` behind an authenticated reverse
+proxy or remove the `ui/` directory from your image. See
+[`SECURITY.md`](../SECURITY.md).
 
 ## See also
 

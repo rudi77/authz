@@ -13,8 +13,21 @@
       <label>API Key
         <input id="api-key" type="password" placeholder="X-API-Key" autocomplete="off" />
       </label>
+      <label class="remember-key">
+        <input id="remember-key" type="checkbox" />
+        Remember in this browser (localStorage)
+      </label>
       <button id="save-key">Use</button>
       <span id="status-pill" class="pill pill--unknown">unknown</span>
+    </div>
+    <div id="security-banner" class="security-banner" role="alert">
+      <strong>Developer tool — not a hardened admin console.</strong>
+      No built-in user authentication or CSRF protection. The API key is
+      kept in <code>sessionStorage</code> (per-tab) by default; ticking
+      <em>Remember</em> persists it in <code>localStorage</code>, which
+      is XSS-sensitive. For non-development use, place behind an
+      authenticated reverse proxy or disable <code>/admin</code>.
+      See <a href="https://github.com/rudi77/authz/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
     </div>
   </header>
 

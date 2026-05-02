@@ -20,10 +20,14 @@ agent runtimes, and tool guards remain the Policy Enforcement Points.
 ## Status
 
 **v0.2 — pilot-ready.** Core decision engine is correct and well-tested
-(83 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
-multi-process state, audit retention, observability, container hardening)
-are in. Customer-readiness gaps remaining: load-tested production
-deployment, SCIM, gRPC API, ReBAC, full admin console.
+(111 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
+multi-process state, audit retention, observability, container hardening,
+fail-closed defaults) are in. Customer-readiness gaps remaining:
+load-tested production deployment, SCIM, gRPC API, ReBAC, full admin
+console.
+
+See [`SECURITY.md`](SECURITY.md) for the threat model, fail-closed
+semantics, and the production hardening checklist.
 
 ## Repository layout
 
@@ -67,7 +71,7 @@ tests/           Unit + integration tests (pytest)
 ```bash
 pip install -e .[dev]
 python examples/contract_ai_agent.py    # in-memory end-to-end demo
-pytest                                    # 83 tests, ~8s
+pytest                                    # 111 tests, ~12s
 ```
 
 ## CLI
@@ -126,7 +130,8 @@ Environment variables consumed by the service:
 | `AUTHZ_AUTO_PROVISION_TENANT` | `false` | Allow self-service tenant creation |
 | `AUTHZ_AUTO_CREATE_SCHEMA` | `auto` | `true`/`false`/`auto` (auto = SQLite only) |
 | `AUTHZ_OTEL_ENABLED` | `false` | Initialize OpenTelemetry exporters |
-| `AUTHZ_CORS_ORIGINS` | `*` | Comma-separated origins for CORS |
+| `AUTHZ_CORS_ORIGINS` | *(empty)* | Comma-separated origins. `*` only allowed when `AUTHZ_DEV_MODE=true` |
+| `AUTHZ_DEV_MODE` | `false` | When `true`: accept any caller if no API keys are configured AND allow `AUTHZ_CORS_ORIGINS=*`. Never set in production. |
 
 ## Endpoint overview
 
@@ -157,8 +162,14 @@ Management (admin tools, used at provisioning time):
 All endpoints require the `X-API-Key` header (or `Authorization: Bearer <key>`).
 Two key sources are checked in order: env-configured bootstrap keys
 (`AUTHZ_API_KEYS`) and DB-backed scoped keys created via the management API.
-Dev mode (no env keys + no DB keys) accepts any caller and is logged at
-startup; the service auto-locks down once any active DB key exists.
+
+**Default is fail-closed:** if no key sources are configured, every
+request is rejected with `401 missing_or_invalid_api_key`. To run the
+service without any keys (local hacking, examples, demos) you must set
+`AUTHZ_DEV_MODE=true` explicitly. In dev mode the service accepts any
+caller, logs a loud warning at startup, and auto-locks down once any
+active DB-backed key is provisioned. Never enable `AUTHZ_DEV_MODE` in
+production.
 
 ## API Keys
 
@@ -202,8 +213,14 @@ curl -X POST http://localhost:8080/v1/invitations/$TOKEN/accept \
 
 A minimal SPA is served at `/admin`. No build step — vanilla HTML + JS
 talking to the same REST API. Useful for: provisioning tenants/apps,
-issuing/rotating API keys, sending invitations, probing decisions. Set
-your API key in the top bar; it's stored in localStorage.
+issuing/rotating API keys, sending invitations, probing decisions.
+
+> **Security note.** The admin UI is a thin developer tool, not a
+> hardened admin console. The API key is stored in `localStorage`
+> (XSS-sensitive) and there is no built-in user authentication or CSRF
+> protection. For non-development use, place it behind an authenticated
+> reverse proxy (mTLS, OIDC proxy, IP allowlist) or disable it
+> entirely. See [`SECURITY.md`](SECURITY.md) for details.
 
 ## Python SDK
 
@@ -288,7 +305,7 @@ storage, no tool execution, no admin UI in MVP.
 ## Testing
 
 ```bash
-pytest -q              # runs all 45 tests in <3s using SQLite
+pytest -q              # runs all 111 tests in ~12s using SQLite
 pytest tests/unit -q   # core library only (no DB)
 ```
 

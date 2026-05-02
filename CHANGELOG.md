@@ -1,5 +1,42 @@
 # Changelog
 
+## Unreleased — security hardening
+
+Closes the most production-hostile defaults that survived v0.2.
+
+### Breaking changes
+
+- **Dev mode is now opt-in.** The previous behaviour ("if no API keys
+  are configured, accept any caller") required no flag. It now
+  requires `AUTHZ_DEV_MODE=true`. Without it, missing keys → every
+  request returns `401 missing_or_invalid_api_key`. The first
+  DB-backed key still auto-locks the service regardless of the flag.
+- **`AUTHZ_CORS_ORIGINS=*` is rejected at startup** unless
+  `AUTHZ_DEV_MODE=true`. Previous default was `*`; new default is
+  empty. Set the explicit list of origins your browser clients use.
+
+### Other changes
+
+- New `SECURITY.md` with threat model, fail-closed semantics, key
+  rotation runbook, audit-log guarantees, cache-invalidation
+  expectations, and a production hardening checklist.
+- Admin UI: API key now defaults to `sessionStorage` (per-tab,
+  cleared on tab close) instead of `localStorage`. A "Remember in
+  this browser" checkbox restores the old behaviour. A persistent
+  banner explains the trade-off and points to `SECURITY.md`.
+- README + docs: corrected test counts (111 Python, 7 Go, 8 TS) and
+  updated all references to the dev-mode behaviour.
+
+### Migration
+
+- If you ran the service intentionally with no keys configured (local
+  development, examples, demos), set `AUTHZ_DEV_MODE=true`.
+- If you depended on `AUTHZ_CORS_ORIGINS` defaulting to `*`, set
+  `AUTHZ_CORS_ORIGINS` explicitly to the origins you serve, or set
+  `AUTHZ_DEV_MODE=true` for local hacking.
+- Production deployments that already configured `AUTHZ_API_KEYS` and
+  scoped DB keys are unaffected.
+
 ## v0.2.0 — pilot-ready hardening (2026-05)
 
 The MVP from v0.1 had correct decision logic but lacked the operational
@@ -59,8 +96,9 @@ gaps. Five themes:
 
 ### Tests
 
-- 83 Python tests (was 50 in v0.1; +33 covering API keys, invitations,
-  audit retention, Redis backends, scope enforcement).
+- 111 Python tests (was 50 in v0.1; +61 covering API keys, invitations,
+  audit retention, Redis backends, scope enforcement, security
+  hardening).
 - 7 Go tests, 8 TypeScript tests — unchanged.
 
 ## v0.1.0 — MVP (2026-05)

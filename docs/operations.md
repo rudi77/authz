@@ -167,10 +167,26 @@ latter.
 
 ### Service starts in dev mode unexpectedly
 
-`AUTHZ_API_KEYS` is empty *and* the `api_keys` table has no active
-rows. Check the env in your container, and `SELECT count(*) FROM
-api_keys WHERE status='active'`. The first key you provision flips
-the service into locked-down mode automatically.
+This requires **all three** of: `AUTHZ_DEV_MODE=true` set in the
+environment, `AUTHZ_API_KEYS` empty, and the `api_keys` table with
+no active rows. Check the env in your container, and
+`SELECT count(*) FROM api_keys WHERE status='active'`. Unset
+`AUTHZ_DEV_MODE` to make the service fail-closed; the first key you
+provision also flips the service into locked-down mode automatically.
+
+### Service refuses to start with a CORS error
+
+The startup check rejects `AUTHZ_CORS_ORIGINS=*` unless
+`AUTHZ_DEV_MODE=true`. Replace `*` with the explicit list of origins
+that need browser access (e.g. `https://admin.example.com`), or
+leave the variable unset. See [`SECURITY.md`](../SECURITY.md).
+
+### Every request returns 401 missing_or_invalid_api_key
+
+The service is fail-closed and no key sources are configured. Either
+set `AUTHZ_API_KEYS` to a bootstrap key, provision a DB-backed key
+through another admin client, or — for local development only — set
+`AUTHZ_DEV_MODE=true` and restart.
 
 ### Authorize returns `tenant_not_active`
 

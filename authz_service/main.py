@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import structlog
 from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine, text
+
+if TYPE_CHECKING:
+    from structlog.stdlib import BoundLogger
+
+    from authz_service.config import Settings
 
 from authz_service.api.agents import router as agents_router
 from authz_service.api.api_keys import router as api_keys_router
@@ -42,6 +47,40 @@ from authz_service.observability import (
 _ADMIN_UI_DIR = Path(__file__).parent / "ui"
 
 
+def _enforce_startup_safety(settings: Settings, log: BoundLogger) -> None:
+    """Fail-closed startup checks for dangerous configurations.
+
+    Two production-hostile defaults from earlier versions are blocked here:
+
+    1. CORS=*: only allowed when AUTHZ_DEV_MODE=true. Otherwise startup
+       refuses, because a permissive CORS policy on an admin/runtime
+       service is almost never what an operator intended.
+    2. Dev mode without keys: when AUTHZ_DEV_MODE=true and no API keys
+       exist, the service accepts every caller — log this loudly so it
+       cannot be missed in container logs.
+    """
+    cors = settings.cors_allow_origins
+    cors_is_wildcard = "*" in cors
+    if cors_is_wildcard and not settings.dev_mode:
+        raise RuntimeError(
+            "AUTHZ_CORS_ORIGINS contains '*' but AUTHZ_DEV_MODE is not enabled. "
+            "Refusing to start with permissive CORS in non-dev mode. "
+            "Set explicit origins (e.g. 'https://admin.example.com') or "
+            "set AUTHZ_DEV_MODE=true for local development."
+        )
+    if settings.dev_mode:
+        log.warning(
+            "AUTHZ_DEV_MODE=true — service will accept any caller when no "
+            "API keys are configured. NEVER set this in production.",
+        )
+        if not settings.api_keys:
+            log.warning(
+                "AUTHZ_API_KEYS is empty and AUTHZ_DEV_MODE=true — every "
+                "request will be authenticated as 'dev-mode' admin until a "
+                "DB-backed key is provisioned (which auto-locks the service).",
+            )
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -49,6 +88,8 @@ def create_app() -> FastAPI:
 
     if os.environ.get("AUTHZ_OTEL_ENABLED", "false").lower() == "true":
         init_tracing()
+
+    _enforce_startup_safety(settings, log)
 
     app = FastAPI(
         title="AuthZ Service",
@@ -76,12 +117,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    if not settings.api_keys:
-        log.warning(
-            "AUTHZ_API_KEYS is empty; service starts in dev mode and will accept "
-            "any caller until at least one DB-backed API key is provisioned."
-        )
 
     app.include_router(authorize_router)
     app.include_router(context_router)

@@ -162,10 +162,15 @@ def require_api_key(
     the lookup.
     """
     candidate = _extract_key(authorization, x_api_key)
-    # Dev mode: if no env keys *and* no DB keys, accept any caller. As soon as
-    # a single DB key is provisioned the service flips to enforcing mode
-    # regardless of env config.
-    if not settings.api_keys and not _has_any_db_key(api_keys):
+    # Dev mode: only when explicitly opted in via AUTHZ_DEV_MODE=true *and*
+    # no env keys *and* no DB keys, accept any caller. As soon as a single
+    # DB key is provisioned the service flips to enforcing mode regardless
+    # of the flag — the first real key auto-locks the service down.
+    if (
+        settings.dev_mode
+        and not settings.api_keys
+        and not _has_any_db_key(api_keys)
+    ):
         stub = ApiKeyRecord(
             id="dev",
             name="dev-mode",
