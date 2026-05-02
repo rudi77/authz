@@ -29,6 +29,7 @@ from authzkit.security.api_keys import (
     ApiKeyRecord,
     ApiKeyService,
     scope_allows,
+    tenant_scope_matches,
 )
 from authzkit.security.invitations import InvitationService
 from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url, init_schema
@@ -207,12 +208,33 @@ def require_admin_scope(
 def require_runtime_scope(
     record: Annotated[ApiKeyRecord, Depends(require_api_key)],
 ) -> ApiKeyRecord:
+    """Capability check for runtime endpoints.
+
+    Lets through admin / runtime / tenant-scoped keys. The per-request
+    tenant binding for tenant-scoped keys is enforced separately via
+    :func:`enforce_tenant_scope_binding` because the tenant id only
+    becomes known once the request body is parsed.
+    """
     if not scope_allows(record.scopes, surface=SCOPE_RUNTIME):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={"error": "scope_required", "scope": SCOPE_RUNTIME},
         )
     return record
+
+
+def enforce_tenant_scope_binding(record: ApiKeyRecord, tenant_id: str) -> None:
+    """Reject runtime requests that target a tenant the key isn't bound to.
+
+    Codex P1.1 — without this check, a key scoped ``tenant:<A>`` could
+    call /v1/authorize with ``tenant_id=<B>`` and still receive a
+    decision. Admin and runtime keys remain unrestricted.
+    """
+    if not tenant_scope_matches(record.scopes, tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={"error": "tenant_scope_mismatch", "tenant_id": tenant_id},
+        )
 
 
 def require_tenant_scope(tenant_id: str):

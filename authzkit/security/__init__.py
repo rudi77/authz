@@ -7,6 +7,7 @@ from authzkit.security.api_keys import (
     ApiKeyRecord,
     ApiKeyService,
     scope_allows,
+    tenant_scope_matches,
 )
 from authzkit.security.invitations import (
     InvitationRecord,
@@ -24,4 +25,5 @@ __all__ = [
     "SCOPE_ADMIN",
     "SCOPE_RUNTIME",
     "scope_allows",
+    "tenant_scope_matches",
 ]

@@ -218,10 +218,29 @@ def scope_allows(
     ``surface`` is one of ``admin`` / ``runtime``. Admins have full access;
     runtime keys are restricted to the four PEP endpoints; tenant-scoped
     keys (``tenant:<id>``) imply runtime + management for that tenant only.
+
+    Tenant-scoped keys also pass the runtime *capability* check when no
+    specific tenant is requested yet — actual per-request enforcement
+    happens via :func:`tenant_scope_matches`.
     """
     scopes_set = set(scopes)
     if SCOPE_ADMIN in scopes_set:
         return True
     if surface == "runtime" and SCOPE_RUNTIME in scopes_set:
         return True
-    return bool(tenant_id is not None and f"tenant:{tenant_id}" in scopes_set)
+    if tenant_id is not None and f"tenant:{tenant_id}" in scopes_set:
+        return True
+    return bool(surface == "runtime" and tenant_id is None and any(s.startswith("tenant:") for s in scopes_set))
+
+
+def tenant_scope_matches(scopes: Iterable[str], tenant_id: str) -> bool:
+    """Whether this key may act on ``tenant_id`` specifically.
+
+    Admin and runtime keys are unrestricted. Tenant-scoped keys must
+    carry ``tenant:<tenant_id>`` exactly. Used by runtime endpoints to
+    enforce per-request tenant binding (Codex P1.1).
+    """
+    scopes_set = set(scopes)
+    if SCOPE_ADMIN in scopes_set or SCOPE_RUNTIME in scopes_set:
+        return True
+    return f"tenant:{tenant_id}" in scopes_set

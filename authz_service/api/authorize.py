@@ -9,9 +9,10 @@ from fastapi import APIRouter, Depends, Header
 
 from authz_service.dependencies import (
     AuditSink,
+    enforce_tenant_scope_binding,
     get_audit_sink,
     get_authorization_engine,
-    require_api_key,
+    require_runtime_scope,
 )
 from authz_service.observability import DECISION_LATENCY, record_decision
 from authzkit.audit.logger import AuditEntry
@@ -21,6 +22,7 @@ from authzkit.rbac.checker import (
     BulkAuthorizeRequest,
     Subject,
 )
+from authzkit.security.api_keys import ApiKeyRecord
 from authzkit.service.schemas import (
     AuthorizeRequestSchema,
     AuthorizeResponseSchema,
@@ -47,14 +49,15 @@ def _to_subject(s: SubjectSchema) -> Subject:
 @router.post(
     "/authorize",
     response_model=AuthorizeResponseSchema,
-    dependencies=[Depends(require_api_key)],
 )
 def authorize(
     request: AuthorizeRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
+    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> AuthorizeResponseSchema:
+    enforce_tenant_scope_binding(api_key, request.tenant_id)
     with DECISION_LATENCY.labels("authorize").time():
         decision = engine.authorize(
             AuthorizeRequest(
@@ -101,14 +104,15 @@ def authorize(
 @router.post(
     "/bulk-authorize",
     response_model=BulkAuthorizeResponseSchema,
-    dependencies=[Depends(require_api_key)],
 )
 def bulk_authorize(
     request: BulkAuthorizeRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
+    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> BulkAuthorizeResponseSchema:
+    enforce_tenant_scope_binding(api_key, request.tenant_id)
     with DECISION_LATENCY.labels("bulk-authorize").time():
         decisions = engine.bulk_authorize(
             BulkAuthorizeRequest(
@@ -159,12 +163,13 @@ def bulk_authorize(
 @router.post(
     "/effective-permissions",
     response_model=EffectivePermissionsResponseSchema,
-    dependencies=[Depends(require_api_key)],
 )
 def effective_permissions(
     request: EffectivePermissionsRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
+    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
 ) -> EffectivePermissionsResponseSchema:
+    enforce_tenant_scope_binding(api_key, request.tenant_id)
     permissions = engine.effective_permissions(
         tenant_id=request.tenant_id,
         application_id=request.application_id,

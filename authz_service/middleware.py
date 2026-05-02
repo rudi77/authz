@@ -7,6 +7,7 @@ Both pieces have an in-memory backend (single-process) and a Redis backend
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from collections import deque
@@ -16,6 +17,21 @@ from typing import Any, Protocol
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
+
+
+def _credential_partition(request: Request) -> str:
+    """Stable, hashed credential identifier for cache partitioning.
+
+    Codex P1.2 — when an idempotency cache keys only on ``X-API-Key``,
+    callers who authenticate via ``Authorization: Bearer …`` all collide
+    on an empty key component and can read each other's cached
+    responses. We fingerprint *both* header styles, with explicit field
+    markers so values can't shift across boundaries to forge a match.
+    """
+    api_key_header = request.headers.get("X-API-Key", "")
+    auth_header = request.headers.get("Authorization", "")
+    payload = f"x={api_key_header}|a={auth_header}".encode()
+    return hashlib.sha256(payload).hexdigest()[:32]
 
 # ----------------------------------------------------------------------------
 # Rate limit
@@ -216,8 +232,9 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         idempotency_key = request.headers.get("Idempotency-Key")
         if not idempotency_key:
             return await call_next(request)
-        api_key = request.headers.get("X-API-Key", "")
-        cache_key = f"{api_key}:{request.url.path}:{idempotency_key}"
+        cache_key = (
+            f"{_credential_partition(request)}:{request.url.path}:{idempotency_key}"
+        )
 
         cached = self._store.get(cache_key)
         if cached is not None:
