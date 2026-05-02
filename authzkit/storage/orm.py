@@ -302,3 +302,73 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, server_default=func.now()
     )
+
+
+class ApiKey(Base):
+    """Scoped API key for service-to-service authentication.
+
+    Keys are stored hashed (SHA-256). The plaintext is shown to admins
+    exactly once at creation time. Scopes are a small enum:
+
+    - ``admin``       — full read/write on management APIs
+    - ``runtime``     — only the four runtime endpoints (resolve-context,
+                        authorize, bulk-authorize, effective-permissions)
+    - ``tenant:<id>`` — same as runtime + management restricted to one tenant
+
+    Rotation: create a new key with ``rotates`` pointing at the old key id;
+    keep both active during rollout, then revoke the old one.
+    """
+
+    __tablename__ = "api_keys"
+    id: Mapped[str] = mapped_column(UUIDType, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    key_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    key_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    scopes: Mapped[str] = mapped_column(String(512), nullable=False, default="admin")
+    tenant_id: Mapped[str | None] = mapped_column(
+        UUIDType, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rotates: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class Invitation(Base):
+    """Pending invitation for a user to join a tenant.
+
+    Tokens are stored hashed; the plaintext is delivered out-of-band (email,
+    chat, etc.) by the integrating application. Accepting an invite creates
+    a Membership and marks the invite ``accepted``.
+    """
+
+    __tablename__ = "invitations"
+    id: Mapped[str] = mapped_column(UUIDType, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        UUIDType, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    application_id: Mapped[str | None] = mapped_column(
+        UUIDType, ForeignKey("applications.id", ondelete="CASCADE"), nullable=True
+    )
+    email: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    roles: Mapped[str] = mapped_column(String(2048), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    invited_by_user_id: Mapped[str | None] = mapped_column(
+        UUIDType, ForeignKey("users.id"), nullable=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    accepted_by_user_id: Mapped[str | None] = mapped_column(UUIDType, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )

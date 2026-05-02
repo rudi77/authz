@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_api_key
+from authz_service.dependencies import get_store, require_admin_scope
 
 
 router = APIRouter(prefix="/v1/tenants", tags=["tenants"])
@@ -48,7 +48,7 @@ class FeatureFlagIn(BaseModel):
     "",
     response_model=TenantOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_tenant(
     body: TenantIn, store: Annotated[SqlAlchemyStore, Depends(get_store)]
@@ -58,7 +58,7 @@ def create_tenant(
 
 
 @router.get(
-    "/{tenant_id}", response_model=TenantOut, dependencies=[Depends(require_api_key)]
+    "/{tenant_id}", response_model=TenantOut, dependencies=[Depends(require_admin_scope)]
 )
 def get_tenant(
     tenant_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
@@ -72,7 +72,7 @@ def get_tenant(
 @router.post(
     "/{tenant_id}/mappings",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_tenant_mapping(
     tenant_id: str,
@@ -99,7 +99,7 @@ def create_tenant_mapping(
 
 @router.put(
     "/{tenant_id}/feature-flags",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def set_feature_flag(
     tenant_id: str,

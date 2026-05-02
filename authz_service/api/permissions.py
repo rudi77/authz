@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_api_key
+from authz_service.dependencies import get_store, require_admin_scope
 from authz_service.api.roles import _resolve_application
 
 
@@ -33,7 +33,7 @@ class PermissionOut(BaseModel):
     "/{application_id}/permissions",
     response_model=PermissionOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_permission(
     application_id: str,
@@ -57,7 +57,7 @@ def create_permission(
 @router.get(
     "/{application_id}/permissions",
     response_model=list[PermissionOut],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def list_permissions(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]

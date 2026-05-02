@@ -17,17 +17,32 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   authz:
     build: .
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       AUTHZ_DATABASE_URL: postgresql+psycopg://authz:authz@postgres:5432/authz
+      AUTHZ_REDIS_URL: redis://redis:6379/0
       AUTHZ_API_KEYS: dev-key
       AUTHZ_LOG_LEVEL: INFO
       AUTHZ_AUDIT_ALL: "false"
       AUTHZ_AUTO_PROVISION_USER: "true"
+      AUTHZ_AUDIT_RETENTION_DAYS: "90"
+      AUTHZ_RATE_LIMIT_PER_MINUTE: "600"
     ports:
       - "8080:8080"
     command: >

@@ -1,9 +1,11 @@
 # authz — Multi-Tenant Authorization Platform
 
 Reusable authorization library and standalone Authorization Service for
-multi-tenant SaaS apps, AI agents, and MCP tool runtimes. Implements the
-spec in [`docs/spec.md`](docs/spec.md) — RBAC with optional ABAC, multi-tenant
-identity normalization, and agent-aware permission intersection.
+multi-tenant SaaS apps, AI agents, and MCP tool runtimes. RBAC with optional
+ABAC, multi-tenant identity normalization, agent-aware permission
+intersection, scoped API keys with rotation, invitation flow, audit
+retention, Prometheus metrics, multi-process Redis backends, and SDKs for
+Python / Go / TypeScript.
 
 The platform answers questions like:
 
@@ -14,6 +16,14 @@ The platform answers questions like:
 It does **not** authenticate users (that's your IdP) and it does **not**
 execute tools (that's your runtime). It is a Policy Decision Point. Apps,
 agent runtimes, and tool guards remain the Policy Enforcement Points.
+
+## Status
+
+**v0.2 — pilot-ready.** Core decision engine is correct and well-tested
+(83 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
+multi-process state, audit retention, observability, container hardening)
+are in. Customer-readiness gaps remaining: load-tested production
+deployment, SCIM, gRPC API, ReBAC, full admin console.
 
 ## Repository layout
 
@@ -30,11 +40,15 @@ authzkit/        Reusable Python core library
   service/       Pydantic schemas shared with SDKs
   audit/         Audit logging primitives
 
+authzkit/security/  Scoped API keys + invitation flow
+
 authz_service/   FastAPI Authorization Service
-  api/           REST routers
-  middleware.py  Rate limit + idempotency middleware
+  api/           REST routers (incl. api_keys, invitations)
+  middleware.py  Rate limit + idempotency (in-memory or Redis)
   observability.py  structlog, Prometheus, optional OTel
+  audit_retention.py  Background pruning worker
   cli.py         `authz` CLI (schema, bootstrap, inspect)
+  ui/            Static admin SPA served at /admin
   main.py        App factory + uvicorn entry point
 
 authz_sdk/       Python SDK (AuthzClient + AuthzAdminClient + helpers)
@@ -42,8 +56,10 @@ sdks/go/         Go SDK (AuthzClient + AdminClient + ToolGuard/MCPGuard)
 sdks/typescript/ TypeScript SDK (same surface, ESM, fetch-based)
 
 migrations/      Alembic migrations (Postgres)
+loadtests/       Locust + asyncio load-test harnesses
 examples/        End-to-end usage demos
 tests/           Unit + integration tests (pytest)
+.github/         CI/CD workflows (Python/Go/TS/Docker)
 ```
 
 ## Quick start (local, no Postgres)
@@ -51,7 +67,7 @@ tests/           Unit + integration tests (pytest)
 ```bash
 pip install -e .[dev]
 python examples/contract_ai_agent.py    # in-memory end-to-end demo
-pytest                                    # 69 tests, ~6s
+pytest                                    # 83 tests, ~8s
 ```
 
 ## CLI
@@ -99,11 +115,18 @@ Environment variables consumed by the service:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `AUTHZ_DATABASE_URL` | `sqlite+pysqlite:///./authz.db` | SQLAlchemy URL (Postgres in prod) |
-| `AUTHZ_API_KEYS` | *(empty)* | Comma-separated API keys; empty = dev mode |
+| `AUTHZ_REDIS_URL` | *(empty)* | Redis URL — enables multi-process rate-limit + idempotency |
+| `AUTHZ_API_KEYS` | *(empty)* | Bootstrap admin keys; once a DB key exists, DB lookup wins |
 | `AUTHZ_LOG_LEVEL` | `INFO` | Python log level |
 | `AUTHZ_AUDIT_ALL` | `false` | Audit allows in addition to denies |
+| `AUTHZ_AUDIT_RETENTION_DAYS` | `0` | Days to retain audit rows (0 = forever) |
+| `AUTHZ_AUDIT_PRUNE_INTERVAL_SECONDS` | `3600` | Pruning interval |
+| `AUTHZ_RATE_LIMIT_PER_MINUTE` | `0` | Per-API-key rate limit; 0 disables |
 | `AUTHZ_AUTO_PROVISION_USER` | `true` | Create users on first `resolve-context` |
 | `AUTHZ_AUTO_PROVISION_TENANT` | `false` | Allow self-service tenant creation |
+| `AUTHZ_AUTO_CREATE_SCHEMA` | `auto` | `true`/`false`/`auto` (auto = SQLite only) |
+| `AUTHZ_OTEL_ENABLED` | `false` | Initialize OpenTelemetry exporters |
+| `AUTHZ_CORS_ORIGINS` | `*` | Comma-separated origins for CORS |
 
 ## Endpoint overview
 
@@ -126,9 +149,61 @@ Management (admin tools, used at provisioning time):
 - `POST /v1/tenants/{tid}/memberships`, `PATCH /v1/memberships/{id}`
 - `POST /v1/tenants/{tid}/applications/{aid}/agents`
 - `PUT /v1/agents/{id}/roles`
+- `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{id}/rotate`,
+  `DELETE /v1/api-keys/{id}`
+- `POST /v1/tenants/{tid}/invitations`, `GET /v1/tenants/{tid}/invitations`,
+  `DELETE /v1/invitations/{id}`, `POST /v1/invitations/{token}/accept`
 
-All endpoints require the `X-API-Key` header (or `Authorization: Bearer <key>`)
-unless `AUTHZ_API_KEYS` is empty (dev mode).
+All endpoints require the `X-API-Key` header (or `Authorization: Bearer <key>`).
+Two key sources are checked in order: env-configured bootstrap keys
+(`AUTHZ_API_KEYS`) and DB-backed scoped keys created via the management API.
+Dev mode (no env keys + no DB keys) accepts any caller and is logged at
+startup; the service auto-locks down once any active DB key exists.
+
+## API Keys
+
+DB-backed keys are scoped:
+
+- `admin` — full read/write on management endpoints
+- `runtime` — only the four PEP endpoints
+- `tenant:<id>` — runtime + management restricted to one tenant
+
+Issue + rotate via the API or admin UI:
+
+```bash
+curl -X POST http://localhost:8080/v1/api-keys \
+  -H "X-API-Key: $BOOTSTRAP" \
+  -d '{"name": "prod-runtime", "scopes": ["runtime"]}'
+# -> returns the plaintext key once; store it immediately
+
+curl -X POST http://localhost:8080/v1/api-keys/$KEY_ID/rotate \
+  -H "X-API-Key: $BOOTSTRAP"
+# -> returns a new key with the old one's scopes; revoke the old one
+# once the new is rolled out.
+```
+
+## Invitation flow
+
+```bash
+# 1. Admin creates an invite — service returns a one-time token
+curl -X POST http://localhost:8080/v1/tenants/$TENANT/invitations \
+  -H "X-API-Key: $ADMIN" \
+  -d '{"email":"alice@acme.com","application_id":"$APP","roles":["legal_reviewer"]}'
+
+# 2. Application emails the user a link containing $TOKEN
+# 3. User logs in via your IdP, app extracts JWT claims, then:
+curl -X POST http://localhost:8080/v1/invitations/$TOKEN/accept \
+  -H "X-API-Key: $APP_KEY" \
+  -d '{"provider":"azure_entra","issuer":"…","subject":"…","email":"alice@acme.com"}'
+# -> creates user (if needed) + membership with the invited roles
+```
+
+## Admin UI
+
+A minimal SPA is served at `/admin`. No build step — vanilla HTML + JS
+talking to the same REST API. Useful for: provisioning tenants/apps,
+issuing/rotating API keys, sending invitations, probing decisions. Set
+your API key in the top bar; it's stored in localStorage.
 
 ## Python SDK
 

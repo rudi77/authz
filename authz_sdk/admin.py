@@ -73,6 +73,39 @@ class Agent:
     status: str
 
 
+@dataclass(frozen=True)
+class ApiKey:
+    """API key as returned by the management API.
+
+    ``key`` is the plaintext — only set on the response from issue/rotate.
+    Listing returns it as None because the service can't recover it.
+    """
+
+    id: str
+    name: str
+    key_prefix: str
+    scopes: list[str]
+    tenant_id: str | None
+    status: str
+    expires_at: str | None
+    last_used_at: str | None
+    rotates: str | None
+    key: str | None = None
+
+
+@dataclass(frozen=True)
+class Invitation:
+    id: str
+    tenant_id: str
+    application_id: str | None
+    email: str
+    roles: list[str]
+    status: str
+    expires_at: str
+    accepted_at: str | None
+    token: str | None = None
+
+
 class AuthzAdminClient:
     """Sync admin client. Threadsafe via httpx Client semantics."""
 
@@ -315,6 +348,88 @@ class AuthzAdminClient:
         return self._request(
             "PUT", f"v1/agents/{agent_id}/roles", json={"roles": roles}
         )
+
+    # ---- API Keys ------------------------------------------------------------
+
+    def issue_api_key(
+        self,
+        *,
+        name: str,
+        scopes: list[str],
+        tenant_id: str | None = None,
+    ) -> ApiKey:
+        data = self._request(
+            "POST",
+            "v1/api-keys",
+            json={"name": name, "scopes": scopes, "tenant_id": tenant_id},
+        )
+        return ApiKey(**data)
+
+    def list_api_keys(self) -> list[ApiKey]:
+        rows = self._request("GET", "v1/api-keys")
+        return [ApiKey(**r) for r in rows]
+
+    def rotate_api_key(self, key_id: str) -> ApiKey:
+        data = self._request("POST", f"v1/api-keys/{key_id}/rotate")
+        return ApiKey(**data)
+
+    def revoke_api_key(self, key_id: str) -> None:
+        self._request("DELETE", f"v1/api-keys/{key_id}")
+
+    # ---- Invitations ---------------------------------------------------------
+
+    def create_invitation(
+        self,
+        tenant_id: str,
+        *,
+        email: str,
+        application_id: str | None = None,
+        roles: list[str] | None = None,
+        ttl_days: int = 7,
+    ) -> Invitation:
+        data = self._request(
+            "POST",
+            f"v1/tenants/{tenant_id}/invitations",
+            json={
+                "email": email,
+                "application_id": application_id,
+                "roles": roles or [],
+                "ttl_days": ttl_days,
+            },
+        )
+        return Invitation(**data)
+
+    def list_invitations(self, tenant_id: str) -> list[Invitation]:
+        rows = self._request("GET", f"v1/tenants/{tenant_id}/invitations")
+        return [Invitation(**r) for r in rows]
+
+    def revoke_invitation(self, invitation_id: str) -> None:
+        self._request("DELETE", f"v1/invitations/{invitation_id}")
+
+    def accept_invitation(
+        self,
+        token: str,
+        *,
+        provider: str,
+        issuer: str,
+        subject: str,
+        email: str | None = None,
+        external_tenant_id: str | None = None,
+        claims: dict[str, Any] | None = None,
+    ) -> Invitation:
+        data = self._request(
+            "POST",
+            f"v1/invitations/{token}/accept",
+            json={
+                "provider": provider,
+                "issuer": issuer,
+                "subject": subject,
+                "email": email,
+                "external_tenant_id": external_tenant_id,
+                "claims": claims or {},
+            },
+        )
+        return Invitation(**data)
 
     # ---- Convenience: bootstrap a (role, permissions) tuple in one call ------
 

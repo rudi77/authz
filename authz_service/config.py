@@ -37,6 +37,17 @@ class Settings:
     rate_limit_per_minute: int = field(
         default_factory=lambda: int(os.environ.get("AUTHZ_RATE_LIMIT_PER_MINUTE", "0"))
     )
+    redis_url: str | None = field(
+        default_factory=lambda: os.environ.get("AUTHZ_REDIS_URL") or None
+    )
+    audit_retention_days: int = field(
+        default_factory=lambda: int(os.environ.get("AUTHZ_AUDIT_RETENTION_DAYS", "0"))
+    )
+    audit_prune_interval_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_AUDIT_PRUNE_INTERVAL_SECONDS", "3600")
+        )
+    )
     auto_create_schema: bool = field(
         default_factory=lambda: os.environ.get(
             "AUTHZ_AUTO_CREATE_SCHEMA",

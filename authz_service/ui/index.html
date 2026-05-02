@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AuthZ Admin</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header>
+    <h1>AuthZ Admin</h1>
+    <div class="api-key-row">
+      <label>API Key
+        <input id="api-key" type="password" placeholder="X-API-Key" autocomplete="off" />
+      </label>
+      <button id="save-key">Use</button>
+      <span id="status-pill" class="pill pill--unknown">unknown</span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab tab--active" data-tab="tenants">Tenants</button>
+    <button class="tab" data-tab="applications">Applications</button>
+    <button class="tab" data-tab="api-keys">API Keys</button>
+    <button class="tab" data-tab="invitations">Invitations</button>
+    <button class="tab" data-tab="decisions">Decision Probe</button>
+  </nav>
+
+  <main>
+    <section id="panel-tenants" class="panel panel--active">
+      <h2>Tenants</h2>
+      <form id="form-tenant" class="form-row">
+        <input name="slug" placeholder="slug (e.g. acme)" required />
+        <input name="name" placeholder="display name" required />
+        <button type="submit">Create</button>
+      </form>
+      <table id="table-tenants"><thead><tr>
+        <th>Slug</th><th>Name</th><th>Status</th><th>ID</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="panel-applications" class="panel">
+      <h2>Applications</h2>
+      <form id="form-application" class="form-row">
+        <input name="slug" placeholder="slug" required />
+        <input name="name" placeholder="display name" required />
+        <button type="submit">Create</button>
+      </form>
+      <table id="table-applications"><thead><tr>
+        <th>Slug</th><th>Name</th><th>Status</th><th>ID</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="panel-api-keys" class="panel">
+      <h2>API Keys</h2>
+      <form id="form-api-key" class="form-row">
+        <input name="name" placeholder="key name" required />
+        <select name="scopes">
+          <option value="admin">admin</option>
+          <option value="runtime">runtime</option>
+        </select>
+        <button type="submit">Issue</button>
+      </form>
+      <div id="new-key-banner" class="banner banner--hidden">
+        <strong>One-time secret — copy now:</strong>
+        <code id="new-key-text"></code>
+      </div>
+      <table id="table-api-keys"><thead><tr>
+        <th>Name</th><th>Prefix</th><th>Scopes</th><th>Status</th><th>Last used</th><th>Actions</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="panel-invitations" class="panel">
+      <h2>Invitations</h2>
+      <form id="form-invitation" class="form-row">
+        <input name="tenant_id" placeholder="tenant id or slug" required />
+        <input name="email" type="email" placeholder="email" required />
+        <input name="application_id" placeholder="application id (optional)" />
+        <input name="roles" placeholder="comma-separated roles" />
+        <button type="submit">Invite</button>
+      </form>
+      <div id="invite-banner" class="banner banner--hidden">
+        <strong>Invitation token (deliver out-of-band):</strong>
+        <code id="invite-token-text"></code>
+      </div>
+      <table id="table-invitations"><thead><tr>
+        <th>Email</th><th>Tenant</th><th>Roles</th><th>Status</th><th>Expires</th>
+      </tr></thead><tbody></tbody></table>
+    </section>
+
+    <section id="panel-decisions" class="panel">
+      <h2>Decision Probe</h2>
+      <form id="form-decision" class="form-row form-row--wrap">
+        <input name="tenant_id" placeholder="tenant id" required />
+        <input name="application_id" placeholder="application id" required />
+        <select name="subject_type">
+          <option value="user">user</option>
+          <option value="agent">agent</option>
+        </select>
+        <input name="user_id" placeholder="user id" />
+        <input name="agent_id" placeholder="agent id (if agent)" />
+        <input name="resource" placeholder="resource (e.g. contracts)" required />
+        <input name="action" placeholder="action (e.g. review)" required />
+        <button type="submit">Check</button>
+      </form>
+      <pre id="decision-output"></pre>
+    </section>
+  </main>
+
+  <footer>
+    <small>Admin UI · service version <span id="service-version">?</span></small>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -6,8 +6,10 @@ that already depend on the SDK get them without importing the core library.
 
 from authz_sdk.admin import (
     Agent,
+    ApiKey,
     Application,
     AuthzAdminClient,
+    Invitation,
     Membership,
     Permission,
     Role,
@@ -30,6 +32,7 @@ from authzkit.tools.guard import ToolGuard
 __all__ = [
     "Agent",
     "AgentGuard",
+    "ApiKey",
     "Application",
     "AuthzAdminClient",
     "AuthzClient",
@@ -37,6 +40,7 @@ __all__ = [
     "AuthzServiceError",
     "BulkCheck",
     "BulkCheckResult",
+    "Invitation",
     "MCPGuard",
     "Membership",
     "Permission",

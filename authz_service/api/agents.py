@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authz_service.dependencies import get_store, require_api_key
+from authz_service.dependencies import get_store, require_admin_scope
 
 
 router = APIRouter(prefix="/v1", tags=["agents"])
@@ -48,7 +48,7 @@ def _resolve_pair(tenant_id: str, application_id: str, store: SqlAlchemyStore):
     "/tenants/{tenant_id}/applications/{application_id}/agents",
     response_model=AgentOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def create_agent(
     tenant_id: str,
@@ -78,7 +78,7 @@ def create_agent(
 @router.get(
     "/tenants/{tenant_id}/applications/{application_id}/agents",
     response_model=list[AgentOut],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def list_agents(
     tenant_id: str,
@@ -101,7 +101,7 @@ def list_agents(
 
 @router.put(
     "/agents/{agent_id}/roles",
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_admin_scope)],
 )
 def set_agent_roles(
     agent_id: str,
