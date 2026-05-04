@@ -311,10 +311,12 @@ class AuthzClient:
         subject: Subject,
         bypass_cache: bool = False,
     ) -> set[str]:
+        # service_account_id must be in the key: two service accounts can
+        # share the same (type, user_id, agent_id) tuple.
         cache_key = (
             tenant_id,
             application_id,
-            f"{subject.type}:{subject.user_id}:{subject.agent_id}",
+            f"{subject.type}:{subject.user_id}:{subject.agent_id}:{subject.service_account_id}",
         )
         if self._cache_ttl > 0 and not bypass_cache:
             cached = self._cache_get(cache_key)

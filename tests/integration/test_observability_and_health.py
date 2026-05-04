@@ -71,6 +71,103 @@ def test_healthz_503_when_db_unreachable(make_client, monkeypatch):
     assert response.status_code == 503
 
 
+def test_healthz_503_body_is_valid_json_with_quotes_in_exception(make_client, monkeypatch):
+    """Exception messages with quotes or braces must not corrupt the JSON body."""
+    client = make_client()
+    assert client.get("/healthz").status_code == 200
+
+    from authz_service import dependencies
+
+    real_engine = dependencies._engine
+    assert real_engine is not None
+
+    class _BrokenConnection:
+        def __enter__(self):
+            raise RuntimeError('weird {"injected":"junk"} message with "quotes"')
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(real_engine, "connect", lambda: _BrokenConnection())
+    response = client.get("/healthz")
+    assert response.status_code == 503
+    body = response.json()  # parses successfully — body is valid JSON
+    assert body["status"] == "degraded"
+    assert "weird" in body["database"]
+    assert "quotes" in body["database"]
+
+
+def test_cors_in_non_dev_mode_rejects_unknown_methods(make_client):
+    """CORS preflight for an unlisted method must be denied in non-dev mode."""
+    client = make_client(cors_allow_origins=("https://admin.example.com",))
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://admin.example.com",
+            "Access-Control-Request-Method": "TRACE",
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_cors_in_non_dev_mode_allows_listed_methods(make_client):
+    client = make_client(cors_allow_origins=("https://admin.example.com",))
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://admin.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-api-key,content-type",
+        },
+    )
+    assert response.status_code == 200
+    allow_methods = response.headers.get("access-control-allow-methods", "")
+    assert "POST" in allow_methods
+    allow_headers = response.headers.get("access-control-allow-headers", "").lower()
+    assert "x-api-key" in allow_headers
+    assert "content-type" in allow_headers
+
+
+def test_cors_in_non_dev_mode_rejects_unknown_headers(make_client):
+    client = make_client(cors_allow_origins=("https://admin.example.com",))
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://admin.example.com",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-evil-injected",
+        },
+    )
+    # Starlette returns 400 for headers not in allow_headers.
+    assert response.status_code == 400
+
+
+def test_cors_in_dev_mode_accepts_arbitrary_headers(make_client):
+    """Wildcard headers in dev mode mirror back any requested header.
+
+    Starlette already restricts methods to its built-in ALL_METHODS even
+    with ``allow_methods=['*']``, so the meaningful difference between
+    dev and non-dev mode is that arbitrary custom headers pass preflight
+    in dev mode."""
+    client = make_client(
+        dev_mode=True,
+        cors_allow_origins=("*",),
+        api_keys=("k1",),
+    )
+    response = client.options(
+        "/healthz",
+        headers={
+            "Origin": "https://anything.example",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-custom-anything,x-another",
+        },
+    )
+    assert response.status_code == 200
+    mirrored = response.headers.get("access-control-allow-headers", "").lower()
+    assert "x-custom-anything" in mirrored
+    assert "x-another" in mirrored
+
+
 def test_metrics_endpoint_exposes_counters(make_client):
     client = make_client()
     # Trigger at least one request so counters are non-zero.

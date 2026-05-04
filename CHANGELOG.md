@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased — code review fixes
+
+Bug-fix sweep from a focused code review (see OPEN_ITEMS.md "Recently
+closed"). All five items are correctness or security fixes; no API
+changes.
+
+### Fixes
+
+- **Invitation accept race**: two concurrent acceptors of the same
+  token could both pass the in-Python status check and both create
+  memberships. `InvitationService.accept` now atomically claims the
+  invitation via `UPDATE ... WHERE status='pending'` and reverts to
+  `pending` if membership creation fails.
+- **SDK cache leak between service accounts**: `AuthzClient`'s
+  effective-permissions cache key omitted `service_account_id`, so two
+  service accounts sharing the same `(type, user_id, agent_id)` saw
+  each other's permissions. The key now includes `service_account_id`.
+- **/healthz JSON corruption**: the 503 body was built with an
+  unescaped f-string; quotes or braces in the exception message
+  produced invalid JSON. Now uses `JSONResponse`.
+- **JWKS / OIDC discovery hardening**: a malformed or HTML response
+  from a misconfigured / compromised IdP raised raw `ValueError` and
+  could leave the validator half-initialised. Decode errors are now
+  surfaced as `JWTValidationError` and payload shapes are validated.
+- **CORS wildcard methods/headers**: production deployments allowed
+  any HTTP method and any header even when `cors_allow_origins` was
+  restricted. Non-dev mode now restricts to the methods/headers the
+  service serves; dev mode keeps the wildcards.
+
+### Internal
+
+- New constants `INVITATION_STATUS_PENDING/ACCEPTED/EXPIRED/REVOKED`
+  in `authzkit/security/invitations.py`; replaces scattered string
+  literals.
+- `_decode_json` is a module-level helper in `authzkit/identity/
+  jwt_validation.py`; was previously a static method on `JWTValidator`.
+
+### Tests
+
+- 12 new tests covering all five fixes (concurrent invitation accept,
+  membership-creation rollback, SDK service-account cache, /healthz
+  exception escaping, four CORS preflight scenarios, and four
+  JWKS-decode hardening cases). 123 tests pass; 4 skip when PyJWT's
+  cryptography backend is unavailable.
+
 ## Unreleased — security hardening
 
 Closes the most production-hostile defaults that survived v0.2.

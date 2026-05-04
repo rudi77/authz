@@ -9,6 +9,27 @@ Status legend: 🟥 blocker for GA · 🟧 needed for first paying customer ·
 
 ---
 
+## Recently closed (2026-05 code review)
+
+Bug-fix sweep prompted by a focused code review (see CHANGELOG.md
+"Unreleased — code review fixes"). None of these were on the roadmap
+above; all were latent issues found by reading the code. Listed here
+so the next reviewer doesn't re-flag them.
+
+| Item | File | Fix |
+|---|---|---|
+| Race condition in `InvitationService.accept` allowed two concurrent acceptors to create duplicate memberships | `authzkit/security/invitations.py` | Atomic `UPDATE ... WHERE status='pending'` claim; rollback to `pending` if membership creation fails |
+| `AuthzClient` cache leaked permissions between distinct service accounts (cache key omitted `service_account_id`) | `authz_sdk/client.py` | Cache key now includes `service_account_id`; regression test in `tests/unit/test_sdk_cache.py` |
+| `/healthz` 503 body was built with an unescaped f-string; quotes/braces in the exception corrupted the JSON | `authz_service/main.py` | Switched to `JSONResponse` so escaping is handled by Starlette |
+| OIDC discovery / JWKS fetch raised raw `ValueError` on HTML or malformed JSON, leaving the validator half-initialised | `authzkit/identity/jwt_validation.py` | New `_decode_json` helper wraps decode errors as `JWTValidationError`; payload-shape guards added |
+| CORS allowed any HTTP method and any header in production (`allow_methods=["*"]`, `allow_headers=["*"]`) | `authz_service/main.py` | Non-dev mode restricts to the methods/headers the service actually serves; dev mode keeps the wildcards |
+
+Test count after fixes: **123 Python tests** (4 skipped — PyJWT-cryptography
+unavailable in CI sandbox; tests run when PyJWT is installed). Update the
+"83 Python" reference in CLAUDE.md when noticed.
+
+---
+
 ## Security & Compliance
 
 | Status | Item | Notes |

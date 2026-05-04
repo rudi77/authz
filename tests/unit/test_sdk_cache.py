@@ -90,6 +90,22 @@ def test_invalidate_drops_partition():
     assert keys[0][0] == "t2"
 
 
+def test_distinct_service_accounts_do_not_share_cache_entry():
+    """Subjects that differ only in service_account_id are distinct cache
+    entries — leaving service_account_id out of the key would leak
+    permissions between service accounts."""
+    transport = _StubTransport({"permissions": ["docs.read"]})
+    client = _client(transport, cache_ttl_seconds=60.0)
+    sa1 = Subject(type="user", user_id="u", service_account_id="sa-1")
+    sa2 = Subject(type="user", user_id="u", service_account_id="sa-2")
+
+    client.get_effective_permissions(tenant_id="t", application_id="a", subject=sa1)
+    client.get_effective_permissions(tenant_id="t", application_id="a", subject=sa2)
+
+    assert transport.calls == 2
+    assert len(client._cache) == 2
+
+
 def test_5xx_triggers_retry(monkeypatch):
     """A flaky upstream that recovers is retried up to the configured limit."""
     counter = {"calls": 0}
