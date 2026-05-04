@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Annotated
 import structlog
 from fastapi import Depends, FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import Engine, text
 
@@ -104,6 +105,8 @@ def create_app() -> FastAPI:
 
     # Middleware execution order is reverse of registration. Runtime order:
     # request-context (innermost) -> rate-limit -> idempotency -> CORS (outer).
+    # Note: starlette runs middleware in reverse-add order, so the *last*
+    # registered middleware is the outermost wrapper.
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         RateLimitMiddleware,
@@ -111,11 +114,27 @@ def create_app() -> FastAPI:
         limiter=rate_limiter,
     )
     app.add_middleware(IdempotencyMiddleware, store=idempotency_store)
+    # CORS: dev mode keeps the wildcard surface for convenience. Outside
+    # dev mode we restrict to the methods and headers the service actually
+    # serves; arbitrary cross-origin TRACE / X-Custom-* requests are
+    # rejected at the preflight.
+    if settings.dev_mode:
+        cors_methods: list[str] = ["*"]
+        cors_headers: list[str] = ["*"]
+    else:
+        cors_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
+        cors_headers = [
+            "Authorization",
+            "Content-Type",
+            "Idempotency-Key",
+            "X-API-Key",
+            "X-Request-Id",
+        ]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allow_origins,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=cors_methods,
+        allow_headers=cors_headers,
     )
 
     app.include_router(authorize_router)
@@ -130,16 +149,17 @@ def create_app() -> FastAPI:
     app.include_router(invitations_router)
 
     @app.get("/healthz", tags=["meta"])
-    def healthz(engine: Annotated[Engine, Depends(get_engine)]) -> dict:
+    def healthz(engine: Annotated[Engine, Depends(get_engine)]) -> JSONResponse:
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
-            return {"status": "ok", "database": "ok"}
+            return JSONResponse({"status": "ok", "database": "ok"})
         except Exception as e:
-            return Response(  # type: ignore[return-value]
+            # JSONResponse handles escaping; an exception message containing
+            # quotes or braces no longer corrupts the body.
+            return JSONResponse(
                 status_code=503,
-                content=f'{{"status":"degraded","database":"error: {e!s}"}}',
-                media_type="application/json",
+                content={"status": "degraded", "database": f"error: {e!s}"},
             )
 
     @app.get("/readyz", tags=["meta"])

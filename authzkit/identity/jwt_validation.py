@@ -25,6 +25,19 @@ class JWTValidationError(Exception):
     """Raised when a JWT fails signature, claim, or freshness checks."""
 
 
+def _decode_json(response: httpx.Response, what: str) -> Any:
+    """Parse a JSON response, surfacing decode errors as JWTValidationError.
+
+    Without this, a malformed or HTML response from a compromised /
+    misconfigured IdP would raise raw ValueError and could leave the
+    validator in a half-initialised state.
+    """
+    try:
+        return response.json()
+    except ValueError as e:
+        raise JWTValidationError(f"{what} returned non-JSON response") from e
+
+
 @dataclass(frozen=True)
 class JWTValidatorConfig:
     """Per-issuer validation rules.
@@ -80,7 +93,12 @@ class JWTValidator:
             raise JWTValidationError(
                 f"OIDC discovery failed for {config.issuer}: {response.status_code}"
             )
-        jwks_uri = response.json().get("jwks_uri")
+        payload = _decode_json(response, f"OIDC discovery for {config.issuer}")
+        if not isinstance(payload, dict):
+            raise JWTValidationError(
+                f"OIDC discovery for {config.issuer} returned non-object payload"
+            )
+        jwks_uri = payload.get("jwks_uri")
         if not jwks_uri:
             raise JWTValidationError(
                 f"OIDC discovery for {config.issuer} returned no jwks_uri"
@@ -96,7 +114,9 @@ class JWTValidator:
         response = self._http.get(url)
         if response.status_code >= 400:
             raise JWTValidationError(f"JWKS fetch failed: {response.status_code}")
-        jwks = response.json()
+        jwks = _decode_json(response, "JWKS endpoint")
+        if not isinstance(jwks, dict):
+            raise JWTValidationError("JWKS endpoint returned non-object payload")
         self._jwks_cache[config.issuer] = (jwks, now + self._jwks_ttl)
         return jwks
 

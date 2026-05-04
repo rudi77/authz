@@ -168,3 +168,135 @@ def test_revoked_invitation_rejected(client: TestClient):
     )
     assert response.status_code == 400
     assert response.json()["detail"]["reason"] == "invitation_not_pending"
+
+
+def test_concurrent_accept_creates_only_one_membership(client: TestClient):
+    """Two acceptors racing on the same token must produce one membership.
+
+    Without the atomic UPDATE-WHERE-status='pending' guard, both threads
+    would pass the in-Python status check and call create_membership,
+    leaving two memberships and a doubly-accepted invitation.
+    """
+    import threading
+
+    from authz_service.config import get_settings
+    from authzkit.security.invitations import InvitationError, InvitationService
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
+
+    tenant, app = _seed(client)
+    invite = client.post(
+        f"/v1/tenants/{tenant['id']}/invitations",
+        json={
+            "email": "race@example.com",
+            "application_id": app["id"],
+            "roles": ["reader"],
+        },
+        headers=HEADERS,
+    ).json()
+    token = invite["token"]
+
+    engine = create_engine_from_url(get_settings().database_url)
+    store = SqlAlchemyStore(engine)
+    invitations = InvitationService(store)
+
+    user_a, _ = store.upsert_user_from_identity(
+        provider="oidc",
+        issuer="https://idp",
+        subject="alice-race",
+        email="alice@x",
+        external_tenant_id=None,
+    )
+    user_b, _ = store.upsert_user_from_identity(
+        provider="oidc",
+        issuer="https://idp",
+        subject="bob-race",
+        email="bob@x",
+        external_tenant_id=None,
+    )
+
+    barrier = threading.Barrier(2)
+    results: list[str] = []
+    results_lock = threading.Lock()
+
+    def attempt(uid: str) -> None:
+        barrier.wait()
+        try:
+            invitations.accept(token, accepting_user_id=uid)
+            with results_lock:
+                results.append("ok")
+        except InvitationError as e:
+            with results_lock:
+                results.append(e.reason)
+        except Exception as e:  # noqa: BLE001 — surface SQLite races for debug
+            with results_lock:
+                results.append(f"error:{e.__class__.__name__}")
+
+    t1 = threading.Thread(target=attempt, args=(user_a.id,))
+    t2 = threading.Thread(target=attempt, args=(user_b.id,))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # One winner, one loser. SQLite occasionally surfaces OperationalError
+    # under contention; treat that as a "loser" too because it still
+    # prevents the duplicate membership we care about.
+    assert "ok" in results, results
+    assert results.count("ok") == 1, results
+
+    from sqlalchemy import select
+
+    from authzkit.storage import orm
+
+    with store.session() as s:
+        memberships = s.scalars(
+            select(orm.Membership).where(orm.Membership.tenant_id == tenant["id"])
+        ).all()
+    assert len(memberships) == 1
+
+
+def test_membership_creation_failure_reverts_invitation(client: TestClient, monkeypatch):
+    """If create_membership raises after the atomic claim, the invitation
+    must roll back to 'pending' so the operator can retry."""
+    from authz_service.config import get_settings
+    from authzkit.security.invitations import InvitationService
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
+
+    tenant, app = _seed(client)
+    invite = client.post(
+        f"/v1/tenants/{tenant['id']}/invitations",
+        json={
+            "email": "revert@example.com",
+            "application_id": app["id"],
+            "roles": ["reader"],
+        },
+        headers=HEADERS,
+    ).json()
+    token = invite["token"]
+
+    engine = create_engine_from_url(get_settings().database_url)
+    store = SqlAlchemyStore(engine)
+    invitations = InvitationService(store)
+
+    user, _ = store.upsert_user_from_identity(
+        provider="oidc",
+        issuer="https://idp",
+        subject="revert-user",
+        email="r@x",
+        external_tenant_id=None,
+    )
+
+    def boom(**_kwargs):
+        raise RuntimeError("simulated DB write failure")
+
+    monkeypatch.setattr(store, "create_membership", boom)
+
+    with pytest.raises(RuntimeError, match="simulated"):
+        invitations.accept(token, accepting_user_id=user.id)
+
+    # Invitation must be back to 'pending' — not stuck on 'accepted'.
+    fresh = invitations.list_for_tenant(tenant["id"])
+    assert len(fresh) == 1
+    assert fresh[0].status == "pending"
+    assert fresh[0].accepted_at is None
+    assert fresh[0].accepted_by_user_id is None

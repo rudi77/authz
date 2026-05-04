@@ -15,10 +15,18 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import secrets
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+
+INVITATION_STATUS_PENDING = "pending"
+INVITATION_STATUS_ACCEPTED = "accepted"
+INVITATION_STATUS_EXPIRED = "expired"
+INVITATION_STATUS_REVOKED = "revoked"
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -80,7 +88,7 @@ class InvitationService:
                 email=email.lower().strip(),
                 token_hash=token_hash,
                 roles=",".join(sorted(set(r.strip() for r in roles if r.strip()))),
-                status="pending",
+                status=INVITATION_STATUS_PENDING,
                 invited_by_user_id=invited_by_user_id,
                 expires_at=expires_at,
             )
@@ -94,47 +102,100 @@ class InvitationService:
         *,
         accepting_user_id: str,
     ) -> InvitationRecord:
-        from sqlalchemy import select
+        from sqlalchemy import select, update
 
         from authzkit.storage import orm
 
         token_hash = _hash_token(plaintext)
+        accepted_at = datetime.now(UTC)
+
+        # Atomically claim the invitation. The UPDATE only succeeds when the
+        # row is still 'pending'; concurrent acceptors with the same token
+        # see rowcount == 0 and lose the race. Without this, two requests
+        # could both pass an in-Python status check and both create
+        # memberships before either marked the row accepted.
         with self.store.session() as s:
             row = s.scalar(
                 select(orm.Invitation).where(orm.Invitation.token_hash == token_hash)
             )
             if row is None or not hmac.compare_digest(row.token_hash, token_hash):
                 raise InvitationError("invalid_token")
-            if row.status != "pending":
+            if row.status != INVITATION_STATUS_PENDING:
                 raise InvitationError("invitation_not_pending")
             if _to_aware(row.expires_at) < datetime.now(UTC):
-                row.status = "expired"
+                row.status = INVITATION_STATUS_EXPIRED
                 s.commit()
                 raise InvitationError("invitation_expired")
 
-            roles = [r for r in row.roles.split(",") if r]
+            invitation_id = row.id
             tenant_id = row.tenant_id
             application_id = row.application_id
+            email = row.email
+            expires_at = row.expires_at
+            invited_by_user_id = row.invited_by_user_id
+            roles = [r for r in (row.roles or "").split(",") if r]
 
-        # Create membership outside the invitation session so the existing
-        # store helper handles role lookup & link-table inserts.
-        self.store.create_membership(
+            result = s.execute(
+                update(orm.Invitation)
+                .where(
+                    orm.Invitation.id == invitation_id,
+                    orm.Invitation.status == INVITATION_STATUS_PENDING,
+                )
+                .values(
+                    status=INVITATION_STATUS_ACCEPTED,
+                    accepted_at=accepted_at,
+                    accepted_by_user_id=accepting_user_id,
+                )
+            )
+            if result.rowcount != 1:
+                s.rollback()
+                raise InvitationError("invitation_not_pending")
+            s.commit()
+
+        try:
+            self.store.create_membership(
+                tenant_id=tenant_id,
+                application_id=application_id,
+                user_id=accepting_user_id,
+                roles=set(roles) or None,
+            )
+        except Exception:
+            # Best-effort revert so the operator can retry. A failure of the
+            # revert itself (e.g. DB outage) must not mask the original
+            # exception, but operators need to know the row is now stuck
+            # in 'accepted' without a membership.
+            try:
+                with self.store.session() as s:
+                    s.execute(
+                        update(orm.Invitation)
+                        .where(orm.Invitation.id == invitation_id)
+                        .values(
+                            status=INVITATION_STATUS_PENDING,
+                            accepted_at=None,
+                            accepted_by_user_id=None,
+                        )
+                    )
+                    s.commit()
+            except Exception:
+                _log.exception(
+                    "Failed to revert invitation %s after membership-creation error; "
+                    "row remains 'accepted' without a membership and needs manual repair",
+                    invitation_id,
+                )
+            raise
+
+        return InvitationRecord(
+            id=invitation_id,
             tenant_id=tenant_id,
             application_id=application_id,
-            user_id=accepting_user_id,
-            roles=set(roles) or None,
+            email=email,
+            roles=tuple(roles),
+            status=INVITATION_STATUS_ACCEPTED,
+            expires_at=expires_at,
+            invited_by_user_id=invited_by_user_id,
+            accepted_at=accepted_at,
+            accepted_by_user_id=accepting_user_id,
         )
-
-        with self.store.session() as s:
-            row = s.scalar(
-                select(orm.Invitation).where(orm.Invitation.token_hash == token_hash)
-            )
-            assert row is not None
-            row.status = "accepted"
-            row.accepted_at = datetime.now(UTC)
-            row.accepted_by_user_id = accepting_user_id
-            s.commit()
-            return self._to_record(row)
 
     def list_for_tenant(self, tenant_id: str) -> list[InvitationRecord]:
         from sqlalchemy import select
@@ -156,7 +217,7 @@ class InvitationService:
             row = s.get(orm.Invitation, invitation_id)
             if row is None:
                 return False
-            row.status = "revoked"
+            row.status = INVITATION_STATUS_REVOKED
             s.commit()
             return True
 
