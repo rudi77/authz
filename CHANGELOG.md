@@ -82,6 +82,33 @@ Closes the most production-hostile defaults that survived v0.2.
 - Production deployments that already configured `AUTHZ_API_KEYS` and
   scoped DB keys are unaffected.
 
+## v0.2.1 — structured authorize result (2026-05)
+
+Adds the structured ``AuthorizeResult`` SDK type that PEP integrations
+need for audit-grade decision data, while keeping the bool-shaped
+``AuthzClient.authorize(...)`` /``.require(...)`` calls
+backwards-compatible.
+
+### Additions
+
+- **``AuthorizeResult``** — frozen dataclass mirroring
+  ``authzkit.service.schemas.AuthorizeResponseSchema``. Exposes
+  ``allowed``, ``decision``, ``reason``, ``required_permission`` and
+  ``matched_permissions`` so PEPs can audit denies without a second
+  round-trip.
+- **``AuthzClient.authorize_decision(...)``** — the new entry point
+  for PEPs that want the full record. ``authorize`` and ``require``
+  now both delegate to it internally; their public signatures and
+  return types are unchanged.
+
+### Compatibility
+
+- ``AuthzClient.authorize(...)`` still returns ``bool``; existing
+  call sites do not need to change.
+- ``AuthzClient.require(...)`` still raises ``PermissionDeniedError``
+  on deny; the raised permission name now reflects the decision's
+  ``required_permission`` instead of being recomputed locally.
+
 ## v0.2.0 — pilot-ready hardening (2026-05)
 
 The MVP from v0.1 had correct decision logic but lacked the operational

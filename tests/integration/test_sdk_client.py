@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from authz_sdk import AuthzClient, BulkCheck, MCPGuard, Subject, ToolGuard
+from authz_sdk import AuthorizeResult, AuthzClient, BulkCheck, MCPGuard, Subject, ToolGuard
 from authz_sdk.agent_session import start_agent_session
 from authz_service.config import Settings, override_settings
 from authz_service.dependencies import reset_engine
@@ -121,6 +121,39 @@ def test_sdk_require_raises_when_denied(sdk: AuthzClient):
             resource="tools.gmail",
             action="send",
         )
+
+
+def test_sdk_authorize_decision_returns_structured_result(sdk: AuthzClient):
+    """``authorize_decision`` must surface ``decision`` / ``reason`` /
+    ``required_permission`` so PEPs (taskforce-enterprise's
+    ``AuthzPolicyEngine`` and ``ToolAuthorizationGate``) can audit
+    decisions without parsing the bool ``authorize`` result."""
+    tenant, app, user_id, _ = _seed(sdk)
+
+    allow = sdk.authorize_decision(
+        tenant_id=tenant["id"],
+        application_id=app["id"],
+        subject=Subject(type="user", user_id=user_id),
+        resource="documents",
+        action="read",
+    )
+    assert isinstance(allow, AuthorizeResult)
+    assert allow.allowed is True
+    assert allow.decision == "allow"
+    assert allow.required_permission == "documents.read"
+    assert "documents.read" in allow.matched_permissions
+
+    deny = sdk.authorize_decision(
+        tenant_id=tenant["id"],
+        application_id=app["id"],
+        subject=Subject(type="user", user_id=user_id),
+        resource="tools.gmail",
+        action="send",
+    )
+    assert deny.allowed is False
+    assert deny.decision == "deny"
+    assert deny.required_permission == "tools.gmail.send"
+    assert deny.reason  # non-empty diagnostic so audit logs read clearly
 
 
 def test_sdk_bulk_authorize(sdk: AuthzClient):

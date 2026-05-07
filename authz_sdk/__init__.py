@@ -16,6 +16,7 @@ from authz_sdk.admin import (
     Tenant,
 )
 from authz_sdk.client import (
+    AuthorizeResult,
     AuthzClient,
     AuthzClientError,
     AuthzServiceError,
@@ -34,6 +35,7 @@ __all__ = [
     "AgentGuard",
     "ApiKey",
     "Application",
+    "AuthorizeResult",
     "AuthzAdminClient",
     "AuthzClient",
     "AuthzClientError",

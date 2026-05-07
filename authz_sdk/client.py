@@ -63,6 +63,23 @@ class BulkCheckResult:
 
 
 @dataclass(frozen=True)
+class AuthorizeResult:
+    """Structured result of an ``/v1/authorize`` decision.
+
+    Mirrors :class:`authzkit.service.schemas.AuthorizeResponseSchema` so
+    PEP integrations (e.g. taskforce-enterprise's ``AuthzPolicyEngine``)
+    can audit ``reason`` / ``required_permission`` instead of squinting
+    at a bare boolean.
+    """
+
+    allowed: bool
+    decision: str
+    reason: str
+    required_permission: str
+    matched_permissions: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class ResolvedContext:
     tenant_id: str
     application_id: str
@@ -235,6 +252,39 @@ class AuthzClient:
             permissions=frozenset(data.get("permissions") or ()),
         )
 
+    def authorize_decision(
+        self,
+        *,
+        tenant_id: str,
+        application_id: str,
+        subject: Subject,
+        resource: str,
+        action: str,
+        context: dict[str, Any] | None = None,
+    ) -> AuthorizeResult:
+        """Return the full structured ``/v1/authorize`` response.
+
+        PEPs that need ``reason`` / ``required_permission`` for audit logs
+        should call this; ``authorize`` and ``require`` remain bool-shaped
+        wrappers on top of it for backwards-compatibility.
+        """
+        body = {
+            "tenant_id": tenant_id,
+            "application_id": application_id,
+            "subject": subject.to_dict(),
+            "resource": resource,
+            "action": action,
+            "context": context or {},
+        }
+        data = self._post("v1/authorize", body)
+        return AuthorizeResult(
+            allowed=bool(data.get("allowed")),
+            decision=str(data.get("decision", "deny")),
+            reason=str(data.get("reason", "")),
+            required_permission=str(data.get("required_permission", f"{resource}.{action}")),
+            matched_permissions=frozenset(data.get("matched_permissions") or ()),
+        )
+
     def authorize(
         self,
         *,
@@ -245,16 +295,14 @@ class AuthzClient:
         action: str,
         context: dict[str, Any] | None = None,
     ) -> bool:
-        body = {
-            "tenant_id": tenant_id,
-            "application_id": application_id,
-            "subject": subject.to_dict(),
-            "resource": resource,
-            "action": action,
-            "context": context or {},
-        }
-        data = self._post("v1/authorize", body)
-        return bool(data.get("allowed"))
+        return self.authorize_decision(
+            tenant_id=tenant_id,
+            application_id=application_id,
+            subject=subject,
+            resource=resource,
+            action=action,
+            context=context,
+        ).allowed
 
     def require(
         self,
@@ -266,15 +314,16 @@ class AuthzClient:
         action: str,
         context: dict[str, Any] | None = None,
     ) -> None:
-        if not self.authorize(
+        result = self.authorize_decision(
             tenant_id=tenant_id,
             application_id=application_id,
             subject=subject,
             resource=resource,
             action=action,
             context=context,
-        ):
-            raise PermissionDeniedError(f"{resource}.{action}")
+        )
+        if not result.allowed:
+            raise PermissionDeniedError(result.required_permission)
 
     def bulk_authorize(
         self,
