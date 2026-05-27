@@ -9,7 +9,14 @@
 <body>
   <header>
     <h1>AuthZ Admin</h1>
-    <div class="api-key-row">
+    <div class="session-row">
+      <span id="session-info" class="session-info">checking session…</span>
+      <button id="signin-btn" type="button" hidden>Sign in with SSO</button>
+      <button id="signout-btn" type="button" hidden>Sign out</button>
+      <button id="dev-mode-toggle" type="button" class="link-btn">Developer mode</button>
+      <span id="status-pill" class="pill pill--unknown">unknown</span>
+    </div>
+    <div id="api-key-panel" class="api-key-row" hidden>
       <label>API Key
         <input id="api-key" type="password" placeholder="X-API-Key" autocomplete="off" />
       </label>
@@ -18,16 +25,16 @@
         Remember in this browser (localStorage)
       </label>
       <button id="save-key">Use</button>
-      <span id="status-pill" class="pill pill--unknown">unknown</span>
     </div>
     <div id="security-banner" class="security-banner" role="alert">
-      <strong>Developer tool — not a hardened admin console.</strong>
-      No built-in user authentication or CSRF protection. The API key is
-      kept in <code>sessionStorage</code> (per-tab) by default; ticking
-      <em>Remember</em> persists it in <code>localStorage</code>, which
-      is XSS-sensitive. For non-development use, place behind an
-      authenticated reverse proxy or disable <code>/admin</code>.
-      See <a href="https://github.com/rudi77/authz/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
+      <strong>SSO login recommended.</strong>
+      When admin OIDC is configured on the service, click <em>Sign in with SSO</em>
+      so credentials never touch the browser. Developer mode lets you paste an
+      <code>X-API-Key</code> — kept in <code>sessionStorage</code> per tab by
+      default, optionally in <code>localStorage</code>, which is XSS-sensitive.
+      For non-development use, place behind an authenticated reverse proxy or
+      disable <code>/admin</code>. See
+      <a href="https://github.com/rudi77/authz/blob/main/SECURITY.md" target="_blank" rel="noopener">SECURITY.md</a>.
     </div>
   </header>
 

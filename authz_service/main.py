@@ -24,12 +24,19 @@ from authz_service.api.applications import router as applications_router
 from authz_service.api.authorize import router as authorize_router
 from authz_service.api.context import router as context_router
 from authz_service.api.invitations import router as invitations_router
+from authz_service.api.oauth import admin_router as oauth_admin_router
+from authz_service.api.oauth import as_router as oauth_as_router
+from authz_service.api.oauth_clients import router as oauth_clients_router
 from authz_service.api.permissions import router as permissions_router
 from authz_service.api.policies import router as memberships_router
 from authz_service.api.roles import router as roles_router
 from authz_service.api.tenants import router as tenants_router
 from authz_service.audit_retention import AuditRetentionWorker
-from authz_service.config import get_settings
+from authz_service.config import (
+    admin_oidc_is_enabled,
+    get_settings,
+    oauth_resource_is_enabled,
+)
 from authz_service.dependencies import get_engine
 from authz_service.middleware import (
     IdempotencyMiddleware,
@@ -37,6 +44,7 @@ from authz_service.middleware import (
     build_idempotency_store,
     build_rate_limiter,
 )
+from authz_service.oauth_janitor import AdminSessionJanitor, SigningKeyJanitor
 from authz_service.observability import (
     RequestContextMiddleware,
     configure_logging,
@@ -51,14 +59,14 @@ _ADMIN_UI_DIR = Path(__file__).parent / "ui"
 def _enforce_startup_safety(settings: Settings, log: BoundLogger) -> None:
     """Fail-closed startup checks for dangerous configurations.
 
-    Two production-hostile defaults from earlier versions are blocked here:
+    Three production-hostile shapes are blocked here:
 
-    1. CORS=*: only allowed when AUTHZ_DEV_MODE=true. Otherwise startup
-       refuses, because a permissive CORS policy on an admin/runtime
-       service is almost never what an operator intended.
-    2. Dev mode without keys: when AUTHZ_DEV_MODE=true and no API keys
-       exist, the service accepts every caller — log this loudly so it
-       cannot be missed in container logs.
+    1. ``CORS=*`` outside dev mode.
+    2. Dev mode with no keys *and* no OAuth issuers — accepts every caller;
+       logged loudly because it cannot be missed in container logs.
+    3. AS enabled with no signing key configured and no DB fallback path —
+       loaded lazily so the failure surfaces on first ``/oauth/token`` call,
+       but we log a warning at startup so operators see it before traffic.
     """
     cors = settings.cors_allow_origins
     cors_is_wildcard = "*" in cors
@@ -74,11 +82,41 @@ def _enforce_startup_safety(settings: Settings, log: BoundLogger) -> None:
             "AUTHZ_DEV_MODE=true — service will accept any caller when no "
             "API keys are configured. NEVER set this in production.",
         )
-        if not settings.api_keys:
+        if not settings.api_keys and not oauth_resource_is_enabled(settings):
             log.warning(
-                "AUTHZ_API_KEYS is empty and AUTHZ_DEV_MODE=true — every "
-                "request will be authenticated as 'dev-mode' admin until a "
-                "DB-backed key is provisioned (which auto-locks the service).",
+                "AUTHZ_API_KEYS is empty, no OAuth issuers configured, and "
+                "AUTHZ_DEV_MODE=true — every request will be authenticated "
+                "as 'dev-mode' admin until a real credential is provisioned "
+                "(which auto-locks the service).",
+            )
+
+    if settings.oauth_as_enabled:
+        if not settings.oauth_issuer:
+            raise RuntimeError(
+                "AUTHZ_OAUTH_AS_ENABLED=true but AUTHZ_OAUTH_ISSUER is empty. "
+                "Set the public issuer URL (e.g. https://authz.example.com)."
+            )
+        if not settings.oauth_signing_key_pem and not settings.dev_mode:
+            log.warning(
+                "AUTHZ_OAUTH_AS_ENABLED=true but no AUTHZ_OAUTH_SIGNING_KEY_PEM "
+                "set; signing key will be loaded from the DB. Run "
+                "`authz oauth signing-key generate` if no key exists yet.",
+            )
+
+    if admin_oidc_is_enabled(settings):
+        missing = [
+            name
+            for name, value in (
+                ("AUTHZ_ADMIN_OIDC_ISSUER", settings.admin_oidc_issuer),
+                ("AUTHZ_ADMIN_OIDC_CLIENT_ID", settings.admin_oidc_client_id),
+                ("AUTHZ_ADMIN_OIDC_CLIENT_SECRET", settings.admin_oidc_client_secret),
+                ("AUTHZ_ADMIN_OIDC_REDIRECT_URI", settings.admin_oidc_redirect_uri),
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                "Admin OIDC enabled but missing: " + ", ".join(missing)
             )
 
 
@@ -102,6 +140,10 @@ def create_app() -> FastAPI:
 
     rate_limiter = build_rate_limiter(settings.rate_limit_per_minute, settings.redis_url)
     idempotency_store = build_idempotency_store(settings.redis_url)
+    # Stash the shared limiter so the /oauth/token route can reuse it for
+    # per-client_id buckets without having to peek the request body in the
+    # global middleware (which would consume the form for the route handler).
+    app.state.rate_limiter = rate_limiter
 
     # Middleware execution order is reverse of registration. Runtime order:
     # request-context (innermost) -> rate-limit -> idempotency -> CORS (outer).
@@ -128,6 +170,7 @@ def create_app() -> FastAPI:
             "Content-Type",
             "Idempotency-Key",
             "X-API-Key",
+            "X-CSRF-Token",
             "X-Request-Id",
         ]
     app.add_middleware(
@@ -135,6 +178,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_allow_origins,
         allow_methods=cors_methods,
         allow_headers=cors_headers,
+        allow_credentials=admin_oidc_is_enabled(settings),
     )
 
     app.include_router(authorize_router)
@@ -147,6 +191,13 @@ def create_app() -> FastAPI:
     app.include_router(agents_router)
     app.include_router(api_keys_router)
     app.include_router(invitations_router)
+
+    # OAuth: each half toggles independently.
+    if settings.oauth_as_enabled:
+        app.include_router(oauth_as_router)
+        app.include_router(oauth_clients_router)
+    if admin_oidc_is_enabled(settings):
+        app.include_router(oauth_admin_router)
 
     @app.get("/healthz", tags=["meta"])
     def healthz(engine: Annotated[Engine, Depends(get_engine)]) -> JSONResponse:
@@ -175,19 +226,32 @@ def create_app() -> FastAPI:
 
     @app.get("/", tags=["meta"])
     def root() -> dict:
+        endpoints = [
+            "/v1/resolve-context",
+            "/v1/authorize",
+            "/v1/bulk-authorize",
+            "/v1/effective-permissions",
+            "/healthz",
+            "/readyz",
+            "/metrics",
+            "/admin",
+        ]
+        if settings.oauth_as_enabled:
+            endpoints.extend(
+                [
+                    "/oauth/token",
+                    "/.well-known/oauth-authorization-server",
+                    "/.well-known/jwks.json",
+                ]
+            )
+        if admin_oidc_is_enabled(settings):
+            endpoints.extend(
+                ["/oauth/login", "/oauth/callback", "/oauth/logout", "/admin/session"]
+            )
         return {
             "service": "authz",
             "version": app.version,
-            "endpoints": [
-                "/v1/resolve-context",
-                "/v1/authorize",
-                "/v1/bulk-authorize",
-                "/v1/effective-permissions",
-                "/healthz",
-                "/readyz",
-                "/metrics",
-                "/admin",
-            ],
+            "endpoints": endpoints,
         }
 
     # Static admin UI — served only when the asset directory exists.
@@ -198,26 +262,54 @@ def create_app() -> FastAPI:
 
     # Background workers managed by FastAPI lifecycle hooks.
     retention_worker: AuditRetentionWorker | None = None
+    session_janitor: AdminSessionJanitor | None = None
+    signing_key_janitor: SigningKeyJanitor | None = None
 
     @app.on_event("startup")
     def _startup() -> None:
-        nonlocal retention_worker
-        if settings.audit_retention_days > 0:
-            engine = get_engine(settings)
-            from authzkit.storage.sqlalchemy import SqlAlchemyStore
+        nonlocal retention_worker, session_janitor, signing_key_janitor
+        engine = get_engine(settings)
+        from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
-            store = SqlAlchemyStore(engine)
+        store = SqlAlchemyStore(engine)
+        if settings.audit_retention_days > 0:
             retention_worker = AuditRetentionWorker(
                 store,
                 retention_days=settings.audit_retention_days,
                 interval_seconds=settings.audit_prune_interval_seconds,
             )
             retention_worker.start()
+        if admin_oidc_is_enabled(settings):
+            from authzkit.security.sessions import AdminSessionService
+
+            session_janitor = AdminSessionJanitor(
+                AdminSessionService(
+                    store, session_ttl_seconds=settings.admin_oidc_session_ttl_seconds
+                )
+            )
+            session_janitor.start()
+        if settings.oauth_as_enabled:
+            from authzkit.security.signing_keys import SigningKeyService
+
+            signing_key_janitor = SigningKeyJanitor(
+                SigningKeyService(
+                    store,
+                    env_pem=settings.oauth_signing_key_pem,
+                    dev_mode=settings.dev_mode,
+                    database_url=settings.database_url,
+                ),
+                max_token_ttl_seconds=settings.oauth_access_token_ttl_seconds,
+            )
+            signing_key_janitor.start()
 
     @app.on_event("shutdown")
     def _shutdown() -> None:
         if retention_worker is not None:
             retention_worker.stop()
+        if session_janitor is not None:
+            session_janitor.stop()
+        if signing_key_janitor is not None:
+            signing_key_janitor.stop()
 
     return app
 

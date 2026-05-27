@@ -1,9 +1,12 @@
 // Minimal admin SPA. No build step, no framework — just fetch + DOM.
 //
-// API key handling: by default the key lives in sessionStorage (cleared
-// when the tab closes) so a stray XSS payload from another origin can't
-// scrape a long-lived credential. The user can opt into localStorage via
-// the "Remember" checkbox; we mirror that choice across reloads.
+// Two auth modes:
+//   1. Session cookie (preferred) — set by /oauth/callback after SSO login;
+//      the SPA reads the CSRF token from /admin/session and echoes it on
+//      every mutating call. Cookies are HttpOnly so JS never touches them.
+//   2. X-API-Key (developer mode) — kept in sessionStorage by default;
+//      optionally localStorage. Hidden behind a toggle so an SSO-enabled
+//      service doesn't tempt operators to paste keys into the browser.
 
 const STORAGE_KEY = "authz.adminKey";
 const REMEMBER_KEY = "authz.rememberKey";
@@ -12,8 +15,15 @@ const remembered = localStorage.getItem(REMEMBER_KEY) === "true";
 let apiKey =
   (remembered ? localStorage.getItem(STORAGE_KEY) : sessionStorage.getItem(STORAGE_KEY)) || "";
 
+let session = null; // { authenticated, kind, csrf_token, ... } from /admin/session
+
 const apiKeyInput = document.getElementById("api-key");
 const rememberCheckbox = document.getElementById("remember-key");
+const apiKeyPanel = document.getElementById("api-key-panel");
+const devToggle = document.getElementById("dev-mode-toggle");
+const sessionInfo = document.getElementById("session-info");
+const signinBtn = document.getElementById("signin-btn");
+const signoutBtn = document.getElementById("signout-btn");
 apiKeyInput.value = apiKey;
 rememberCheckbox.checked = remembered;
 
@@ -40,6 +50,67 @@ rememberCheckbox.addEventListener("change", () => {
   if (apiKey) persistKey(apiKey, rememberCheckbox.checked);
 });
 
+devToggle.addEventListener("click", () => {
+  apiKeyPanel.hidden = !apiKeyPanel.hidden;
+});
+
+signinBtn.addEventListener("click", () => {
+  // The redirect target is the current admin URL so the callback bounces back.
+  const ret = encodeURIComponent("/admin/");
+  window.location.href = `/oauth/login?return_to=${ret}`;
+});
+
+signoutBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/oauth/logout", { method: "POST", credentials: "include" });
+  } catch {}
+  session = null;
+  await loadSession();
+});
+
+async function loadSession() {
+  // Try the session probe — works whether we have a cookie, an X-API-Key,
+  // or neither. 401 here just means "not logged in", not an error.
+  const headers = { Accept: "application/json" };
+  if (apiKey) headers["X-API-Key"] = apiKey;
+  try {
+    const resp = await fetch("/admin/session", {
+      headers,
+      credentials: "include",
+    });
+    if (resp.status === 401) {
+      session = null;
+    } else if (resp.ok) {
+      session = await resp.json();
+    }
+  } catch {
+    session = null;
+  }
+  renderSessionInfo();
+}
+
+function renderSessionInfo() {
+  if (session && session.kind === "session") {
+    sessionInfo.textContent = session.email
+      ? `signed in as ${session.email}`
+      : `signed in as ${session.subject}`;
+    signinBtn.hidden = true;
+    signoutBtn.hidden = false;
+  } else if (session && session.kind === "apikey") {
+    sessionInfo.textContent = "using API key";
+    signinBtn.hidden = false;
+    signoutBtn.hidden = true;
+  } else if (session && session.kind === "token") {
+    sessionInfo.textContent = "using bearer token";
+    signinBtn.hidden = false;
+    signoutBtn.hidden = true;
+  } else {
+    sessionInfo.textContent = "not signed in";
+    signinBtn.hidden = false;
+    signoutBtn.hidden = true;
+  }
+}
+
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("tab--active"));
@@ -59,8 +130,22 @@ async function api(path, options = {}) {
     Accept: "application/json",
     ...(options.headers || {}),
   };
-  if (apiKey) headers["X-API-Key"] = apiKey;
-  const response = await fetch(path, { ...options, headers });
+  // Session principal: send CSRF token on mutating calls and include cookies.
+  // Otherwise fall back to X-API-Key.
+  const mutating =
+    options.method && options.method.toUpperCase() !== "GET" && options.method.toUpperCase() !== "HEAD";
+  if (session && session.kind === "session") {
+    if (mutating && session.csrf_token) {
+      headers["X-CSRF-Token"] = session.csrf_token;
+    }
+  } else if (apiKey) {
+    headers["X-API-Key"] = apiKey;
+  }
+  const response = await fetch(path, {
+    ...options,
+    headers,
+    credentials: "include",
+  });
   if (response.status === 204) return null;
   if (response.status >= 400) {
     let detail;
@@ -261,6 +346,7 @@ function showSecret(bannerId, codeId, secret) {
 }
 
 async function refreshAll() {
+  await loadSession();
   await Promise.all([
     healthCheck(),
     loadTenants(),

@@ -25,12 +25,20 @@ def _credential_partition(request: Request) -> str:
     Codex P1.2 — when an idempotency cache keys only on ``X-API-Key``,
     callers who authenticate via ``Authorization: Bearer …`` all collide
     on an empty key component and can read each other's cached
-    responses. We fingerprint *both* header styles, with explicit field
+    responses. We fingerprint *every* credential surface — API key,
+    Bearer JWT, and the admin session cookie — with explicit field
     markers so values can't shift across boundaries to forge a match.
+    Without the session-cookie component, two OIDC-authenticated admins
+    would share one partition and could replay each other's cached
+    POST responses for the same ``Idempotency-Key``.
     """
     api_key_header = request.headers.get("X-API-Key", "")
     auth_header = request.headers.get("Authorization", "")
-    payload = f"x={api_key_header}|a={auth_header}".encode()
+    # Session cookie is browser-bound and unique per logged-in admin.
+    # Kept in sync with ``SESSION_COOKIE_NAME`` in dependencies.py —
+    # imported lazily here to avoid a circular import.
+    session_cookie = request.cookies.get("authz_session", "")
+    payload = f"x={api_key_header}|a={auth_header}|s={session_cookie}".encode()
     return hashlib.sha256(payload).hexdigest()[:32]
 
 # ----------------------------------------------------------------------------
@@ -128,6 +136,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Callable[..., Any]):
         if not self._enabled or self._limiter is None:
             return await call_next(request)
+        # Path-agnostic bucket: X-API-Key for service callers, remote IP
+        # otherwise. Per-OAuth-client_id rate limiting is applied inside
+        # the ``/oauth/token`` route handler (see ``api/oauth.py``) so
+        # this middleware never has to peek the form body — peeking it
+        # here would consume the request stream and break Form() in the
+        # downstream handler (Starlette BaseHTTPMiddleware limitation).
         key = (
             request.headers.get("X-API-Key")
             or (request.client.host if request.client else None)

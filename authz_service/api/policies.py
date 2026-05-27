@@ -11,7 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authz_service.dependencies import get_store, require_admin_scope
+from authz_service.dependencies import get_store, require_admin
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["memberships"])
@@ -42,7 +42,7 @@ class MembershipPatch(BaseModel):
     "/tenants/{tenant_id}/memberships",
     response_model=MembershipOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def create_membership(
     tenant_id: str,
@@ -80,7 +80,7 @@ def create_membership(
 @router.get(
     "/tenants/{tenant_id}/memberships",
     response_model=list[MembershipOut],
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def list_memberships(
     tenant_id: str,
@@ -125,7 +125,7 @@ def list_memberships(
 @router.patch(
     "/memberships/{membership_id}",
     response_model=MembershipOut,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def update_membership(
     membership_id: str,

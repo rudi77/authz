@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from authz_service.dependencies import (
     get_api_key_service,
-    require_admin_scope,
+    require_admin,
 )
 from authzkit.security.api_keys import ApiKeyMaterial, ApiKeyService
 
@@ -62,7 +62,7 @@ def _to_out(material: ApiKeyMaterial) -> ApiKeyCreated:
     "",
     response_model=ApiKeyCreated,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def create_api_key(
     body: ApiKeyIn,
@@ -80,7 +80,7 @@ def create_api_key(
 @router.get(
     "",
     response_model=list[ApiKeyOut],
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def list_api_keys(
     keys: Annotated[ApiKeyService, Depends(get_api_key_service)],
@@ -104,7 +104,7 @@ def list_api_keys(
 @router.post(
     "/{key_id}/rotate",
     response_model=ApiKeyCreated,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def rotate_api_key(
     key_id: str,
@@ -122,7 +122,7 @@ def rotate_api_key(
 @router.delete(
     "/{key_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def revoke_api_key(
     key_id: str,

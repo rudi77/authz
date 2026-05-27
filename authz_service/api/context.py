@@ -10,7 +10,7 @@ from authz_service.config import Settings, get_settings
 from authz_service.dependencies import (
     enforce_tenant_scope_binding,
     get_store,
-    require_runtime_scope,
+    require_runtime,
 )
 from authzkit.exceptions import (
     InvalidRequestError,
@@ -19,7 +19,7 @@ from authzkit.exceptions import (
 )
 from authzkit.identity.base import IdentityPrincipal
 from authzkit.rbac.resolver import PermissionResolver
-from authzkit.security.api_keys import ApiKeyRecord
+from authzkit.security.principal import Principal
 from authzkit.service.schemas import ResolveContextRequestSchema, ResolveContextResponseSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.resolver import TenantContextResolver
@@ -35,9 +35,9 @@ def resolve_context(
     request: ResolveContextRequestSchema,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     settings: Annotated[Settings, Depends(get_settings)],
-    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
+    caller: Annotated[Principal, Depends(require_runtime)],
 ) -> ResolveContextResponseSchema:
-    principal = IdentityPrincipal(
+    identity = IdentityPrincipal(
         provider=request.provider,
         issuer=request.issuer,
         subject=request.subject,
@@ -53,7 +53,7 @@ def resolve_context(
     )
     try:
         ctx = resolver.resolve(
-            principal,
+            identity,
             application_slug=request.application_id,
             explicit_tenant_id=request.explicit_tenant_id,
         )
@@ -69,7 +69,7 @@ def resolve_context(
     # Once the principal resolves to a concrete tenant, enforce per-key
     # tenant binding so a tenant-scoped key can't probe other tenants by
     # supplying claims that resolve elsewhere.
-    enforce_tenant_scope_binding(api_key, ctx.tenant_id)
+    enforce_tenant_scope_binding(caller, ctx.tenant_id)
     return ResolveContextResponseSchema(
         tenant_id=ctx.tenant_id,
         application_id=ctx.application_id,

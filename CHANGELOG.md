@@ -1,5 +1,101 @@
 # Changelog
 
+## Unreleased — OAuth 2.0 in three roles
+
+Adds full OAuth 2.0 compatibility to the service, additive to the
+existing API-key authentication. Single-PR landing of three previously
+roadmap'd items (see OPEN_ITEMS.md "Recently closed 2026-05 OAuth 2.0
+rollout").
+
+### New — Resource Server
+
+- The service accepts Bearer JWTs on every endpoint, validated against
+  configured external OIDC issuers. Multi-issuer config via
+  `AUTHZ_OAUTH_RESOURCE_ISSUERS` (JSON array, env or file).
+- Per-issuer claim mapping: which claim carries the scope
+  (`scope` / `scp` / `roles`), how external scope names translate to
+  internal `admin` / `runtime` / `tenant:<id>` vocabulary, which
+  claim carries the tenant id.
+- Resolution order at the auth dependency: `X-API-Key` →
+  `Authorization: Bearer <api-key>` (legacy) → `Authorization: Bearer <jwt>` →
+  admin session cookie. Sniffed by token shape, not by configuration.
+
+### New — Authorization Server
+
+- `POST /oauth/token` issues RS256-signed JWTs for the
+  `client_credentials` grant (RFC 6749 §4.4); accepts both
+  `client_secret_basic` and `client_secret_post` (RFC 6749 §3.2.1).
+- `GET /.well-known/oauth-authorization-server` (RFC 8414 metadata).
+- `GET /.well-known/jwks.json` (active + retiring public keys).
+- Signing-key custody: `AUTHZ_OAUTH_SIGNING_KEY_PEM` takes precedence
+  over the DB-backed `oauth_signing_keys` table. Dev-mode + SQLite
+  auto-generates an ephemeral RSA-2048 key; refused on any Postgres
+  DSN.
+- Signing-key rotation: `POST /v1/oauth/signing-keys/rotate` demotes
+  the current active to `retiring`. JWKS exposes both until a
+  background janitor revokes them after `2 × max_token_ttl`.
+- Self-trust loop: tokens minted by this service validate on its own
+  runtime endpoints in the same process without HTTP loopback (the
+  resolver reads JWKS directly from `SigningKeyService`).
+- Tenant-bound OAuth clients cannot mint cross-tenant tokens —
+  `invalid_scope` if requested. Explicit regression test.
+
+### New — Admin OIDC login
+
+- `GET /oauth/login` → `GET /oauth/callback` → `POST /oauth/logout` /
+  `GET /admin/session` implement Authorization Code + PKCE (S256)
+  against any standard OIDC IdP.
+- Server-side sessions in the new `admin_sessions` table; CSRF token
+  is per-session and required on mutating session-authenticated calls.
+- Group / email allow-list maps the IdP identity to the internal
+  `admin` scope (`AUTHZ_ADMIN_OIDC_ADMIN_GROUPS`,
+  `AUTHZ_ADMIN_OIDC_EMAIL_ALLOWLIST`).
+- The admin SPA is now session-aware: shows "Sign in with SSO" when
+  admin OIDC is configured; falls back to "Developer mode" API-key
+  panel (hidden by default).
+
+### New — schema, CLI, ops
+
+- Alembic migration `0003_oauth_clients_signing_keys_sessions` adds
+  four tables (`oauth_clients`, `oauth_signing_keys`, `admin_sessions`,
+  `admin_login_attempts`).
+- `authz oauth client create|list|revoke|rotate` and
+  `authz oauth signing-key generate|rotate|list` CLI subcommands.
+- `RateLimitMiddleware` buckets `POST /oauth/token` per `client_id`
+  rather than per source IP, so one rogue client cannot crowd out the
+  rest.
+
+### Changed
+
+- `_extract_key` (`authz_service/dependencies.py`) renamed internally
+  to `_extract_credential` returning a tagged credential; the old
+  function name is preserved as a thin shim.
+- `require_admin_scope` / `require_runtime_scope` are now thin
+  back-compat wrappers around the new union-aware `require_admin` /
+  `require_runtime` (which admit `ApiKeyRecord` / `TokenPrincipal` /
+  `SessionPrincipal`). All in-repo routers migrated to the new names;
+  external callers that imported the old names still work.
+- `enforce_tenant_scope_binding` now accepts the union.
+- Dev-mode auto-bypass disengages as soon as **any** auth source is
+  configured — API keys, DB keys, OAuth issuers, or admin OIDC.
+- `pyproject.toml`: `pyjwt[crypto]>=2.8`, `cryptography>=42.0`, and
+  `python-multipart>=0.0.9` are now required runtime dependencies.
+
+### Fixes
+
+- `JWTValidator.validate` used a private PyJWT API
+  (`PyJWKClient._jwk_set_to_key`) that was removed in PyJWT 2.6+.
+  Replaced with the public `jwt.PyJWK(...).key`.
+
+### Tests
+
+- 74 new tests (34 unit + 40 integration) covering scope mapping,
+  multi-issuer routing, signing-key bootstrap + rotation + ephemeral
+  guard, client_credentials happy + error paths, self-trust loop,
+  admin OIDC happy + state-mismatch + group-deny + CSRF + logout,
+  and dev-bypass auto-lock for the new auth surfaces.
+- Total: **185 Python tests** pass; 0 failures.
+
 ## Unreleased — code review fixes
 
 Bug-fix sweep from a focused code review (see OPEN_ITEMS.md "Recently

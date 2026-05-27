@@ -18,8 +18,8 @@ from authz_service.config import Settings, get_settings
 from authz_service.dependencies import (
     get_invitation_service,
     get_store,
-    require_admin_scope,
-    require_api_key,
+    require_admin,
+    require_caller,
 )
 from authzkit.security.invitations import InvitationError, InvitationService
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
@@ -71,7 +71,7 @@ class InvitationAccept(BaseModel):
     "/tenants/{tenant_id}/invitations",
     response_model=InvitationCreated,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def create_invitation(
     tenant_id: str,
@@ -114,7 +114,7 @@ def create_invitation(
 @router.get(
     "/tenants/{tenant_id}/invitations",
     response_model=list[InvitationOut],
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def list_invitations(
     tenant_id: str,
@@ -142,7 +142,7 @@ def list_invitations(
 @router.post(
     "/invitations/{token}/accept",
     response_model=InvitationOut,
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_caller)],
 )
 def accept_invitation(
     token: str,
@@ -178,7 +178,7 @@ def accept_invitation(
 @router.delete(
     "/invitations/{invitation_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def revoke_invitation(
     invitation_id: str,

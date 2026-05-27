@@ -17,6 +17,46 @@ from authz_service.dependencies import reset_engine
 
 BOOTSTRAP_HEADERS = {"X-API-Key": "bootstrap-key"}
 
+# ---------------------------------------------------------------------------
+# Dev-mode auto-lock: OAuth issuer presence disengages the bypass
+# ---------------------------------------------------------------------------
+
+
+def test_dev_bypass_active_when_no_auth_source_configured(make_client):
+    """Baseline: no keys, no OAuth ⇒ dev-bypass admits any caller as admin."""
+    c = make_client(api_keys=(), dev_mode=True)
+    r = c.post("/v1/tenants", json={"slug": "x", "name": "x"})
+    assert r.status_code == 201
+
+
+def test_dev_bypass_disabled_when_oauth_issuer_configured(make_client):
+    """OAuth issuer configured ⇒ bypass off even with no API keys."""
+    import json
+
+    c = make_client(
+        api_keys=(),
+        dev_mode=True,
+        oauth_resource_issuers_json=json.dumps(
+            [{"issuer": "https://idp.example", "audience": "api"}]
+        ),
+    )
+    r = c.post("/v1/tenants", json={"slug": "x", "name": "x"})
+    assert r.status_code == 401
+
+
+def test_dev_bypass_disabled_when_admin_oidc_configured(make_client):
+    c = make_client(
+        api_keys=(),
+        dev_mode=True,
+        admin_oidc_enabled="true",
+        admin_oidc_issuer="https://idp.example",
+        admin_oidc_client_id="x",
+        admin_oidc_client_secret="y",
+        admin_oidc_redirect_uri="http://localhost/cb",
+    )
+    r = c.post("/v1/tenants", json={"slug": "x", "name": "x"})
+    assert r.status_code == 401
+
 
 @pytest.fixture()
 def make_client(temp_db_url):

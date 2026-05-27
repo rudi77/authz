@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authz_service.dependencies import get_store, require_admin_scope
+from authz_service.dependencies import get_store, require_admin
 from authzkit.rbac.models import RoleScope
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
@@ -46,7 +46,7 @@ def _resolve_application(application_id: str, store: SqlAlchemyStore):
     "/applications/{application_id}/roles",
     response_model=RoleOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def create_role(
     application_id: str,
@@ -81,7 +81,7 @@ def create_role(
 @router.get(
     "/applications/{application_id}/roles",
     response_model=list[RoleOut],
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def list_roles(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
@@ -103,7 +103,7 @@ def list_roles(
 
 @router.put(
     "/roles/{role_id}/permissions",
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def set_role_permissions(
     role_id: str,
@@ -120,7 +120,7 @@ def set_role_permissions(
 
 @router.get(
     "/roles/{role_id}/permissions",
-    dependencies=[Depends(require_admin_scope)],
+    dependencies=[Depends(require_admin)],
 )
 def get_role_permissions(
     role_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]

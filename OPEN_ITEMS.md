@@ -9,6 +9,31 @@ Status legend: 🟥 blocker for GA · 🟧 needed for first paying customer ·
 
 ---
 
+## Recently closed (2026-05 OAuth 2.0 rollout)
+
+Single-PR landing of the three OAuth roles. Items previously listed as
+🟧 / 🟨 in this document.
+
+| Item | What landed | Files |
+|---|---|---|
+| OAuth `client_credentials` flow | `POST /oauth/token` (RFC 6749 §4.4) with `client_secret_basic` + `client_secret_post`; RS256-signed JWTs; new `oauth_clients` table; CLI `authz oauth client create\|list\|revoke\|rotate` | `authz_service/api/oauth.py`, `authzkit/security/oauth_clients.py` |
+| JWT validation as first-class middleware | Bearer JWTs are accepted at the same endpoints as API keys via a per-route `require_caller` union; multi-issuer config via `AUTHZ_OAUTH_RESOURCE_ISSUERS`; claim → internal scope mapping per issuer; tenant binding from a configurable claim | `authzkit/security/oauth_resource.py`, `authz_service/dependencies.py` |
+| Auth in the SPA | Admin OIDC login (Authorization Code + PKCE) against any standard OIDC IdP; server-side sessions with CSRF; SPA falls back to API-key "developer mode" | `authz_service/api/oauth.py` (login/callback/logout), `authzkit/security/sessions.py`, `authz_service/ui/` |
+| RFC 8414 metadata + JWKS endpoints | `GET /.well-known/oauth-authorization-server`, `GET /.well-known/jwks.json` | `authz_service/api/oauth.py` |
+| Signing-key custody story | Env-first (`AUTHZ_OAUTH_SIGNING_KEY_PEM`) with DB fallback; dev-mode + SQLite-only auto-generation; rotation + retiring-key janitor | `authzkit/security/signing_keys.py`, `authz_service/oauth_janitor.py` |
+
+New roadmap items the OAuth rollout opened up:
+
+| Status | Item | Notes |
+|---|---|---|
+| 🟨 | **RFC 7662 token introspection** | Out of scope for the initial OAuth landing. Thin PEPs without JWT libraries would still benefit; `POST /v1/introspect` returning `active/scope/exp/...` is the natural follow-up. |
+| 🟨 | **RFC 7009 token revocation** | Issued JWTs are bearer-and-replayable until exp (default 1h). Add a `POST /oauth/revoke` + `jti` deny-list for fast-revocation use cases. |
+| 🟨 | **`jti` replay-deny list** | Pairs with revocation. Bound table size with a janitor keyed off max token TTL. |
+| 🟨 | **DB-backed dynamic issuer registry** | Today issuer trust is env-only. A `POST /v1/admin/oauth/issuers` would let operators add IdPs without redeploy. Conflict resolution: env wins. |
+| 🟨 | **mTLS for service-to-service** | Was already on the roadmap; still relevant — OAuth client_credentials helps callers with an IdP but enterprise tier expects mTLS. |
+
+---
+
 ## Recently closed (2026-05 code review)
 
 Bug-fix sweep prompted by a focused code review (see CHANGELOG.md
@@ -38,7 +63,7 @@ unavailable in CI sandbox; tests run when PyJWT is installed). Update the
 | 🟥 | **Dependency scanning in CI** | Add `pip-audit`, `govulncheck`, and `npm audit` jobs. Fail on high-severity findings. |
 | 🟥 | **Container image scanning** | Trivy or Grype scan on the published image; gate `latest` tag on a clean scan. |
 | 🟧 | **mTLS for service-to-service** | Spec §15.1 mentions it as the enterprise tier. Right now everything is API-key based. |
-| 🟧 | **OAuth client-credentials flow** | Alternative to API keys for callers that already have an IdP. |
+| ✅ | ~~**OAuth client-credentials flow**~~ | Landed — see "Recently closed (2026-05 OAuth 2.0 rollout)". |
 | 🟧 | **Tenant-scoped API keys end-to-end** | The scope value `tenant:<id>` is supported in the model but the management routers don't enforce per-tenant scoping yet — admin scope still passes everywhere. |
 | 🟧 | **Audit-log query API** | Currently audit rows are written but only queryable via direct DB access. Compliance requires `GET /v1/audit-log?tenant_id=...&from=...&to=...` with pagination. |
 | 🟧 | **Audit-log archival to object storage** | Retention pruning deletes; some compliance regimes require export-then-delete. |
@@ -53,8 +78,8 @@ unavailable in CI sandbox; tests run when PyJWT is installed). Update the
 |---|---|---|
 | 🟧 | **SCIM provisioning endpoint** | Enterprise customers expect SCIM 2.0 for user lifecycle. Without it, onboarding 1k users requires 1k API calls. |
 | 🟧 | **Bulk membership operations** | `POST /v1/tenants/{tid}/memberships:batch`. |
-| 🟧 | **JWT validation as first-class middleware** | `JWTValidator` exists in authzkit but is opt-in; the service itself accepts pre-resolved IdentityPrincipals from callers. Optional middleware that validates JWTs at the AuthZ-service edge would simplify thin PEPs. |
-| 🟨 | **Token introspection endpoint** | RFC 7662 — apps without JWT verification can ask the service to verify. |
+| ✅ | ~~**JWT validation as first-class middleware**~~ | Landed — see "Recently closed (2026-05 OAuth 2.0 rollout)". |
+| 🟨 | **Token introspection endpoint** | RFC 7662 — apps without JWT verification can ask the service to verify. Bumped from 🟨 to "follow-up" — see roadmap section. |
 | 🟦 | **Password / login flow** | Out of scope per spec §3.2. |
 | 🟦 | **Refresh token storage** | Out of scope per spec §3.2. |
 
@@ -109,7 +134,7 @@ unavailable in CI sandbox; tests run when PyJWT is installed). Update the
 | 🟨 | **Role-permission matrix view** | Visual editor for "which permissions does each role have, side-by-side". |
 | 🟨 | **Audit log viewer** | Filter by tenant / decision / reason / time range. Depends on the audit query API above. |
 | 🟨 | **Bulk membership upload** | CSV / JSON drop into the UI. |
-| 🟨 | **Auth in the SPA** | Today the API key sits in localStorage. A real admin UI would offer SSO + scoped sessions. |
+| ✅ | ~~**Auth in the SPA**~~ | Landed — admin OIDC login with PKCE + server-side sessions. API-key path moved behind a "Developer mode" toggle. |
 
 ## Documentation
 
