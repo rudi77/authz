@@ -11,10 +11,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     String,
     Table,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -340,6 +342,125 @@ class ApiKey(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class OAuthClient(Base):
+    """OAuth 2.0 client for the ``client_credentials`` grant (RFC 6749 §4.4).
+
+    Distinct from :class:`ApiKey`: an API key is a long-lived bearer secret
+    callers present directly on every request; an OAuth client trades its
+    secret at ``POST /oauth/token`` for a short-lived JWT and the secret
+    never travels on the PEP-facing requests after that. Shared crypto
+    helpers (``_hash``, ``_constant_time_eq``) live in
+    :mod:`authzkit.security.api_keys`.
+    """
+
+    __tablename__ = "oauth_clients"
+    id: Mapped[str] = mapped_column(UUIDType, primary_key=True, default=_uuid)
+    client_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    secret_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # CSV of *granted-max* scopes (same vocabulary as ApiKey.scopes). A token
+    # request can ask for a subset via the OAuth ``scope`` form param.
+    scopes: Mapped[str] = mapped_column(String(512), nullable=False, default="runtime")
+    tenant_id: Mapped[str | None] = mapped_column(
+        UUIDType, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+
+class OAuthSigningKey(Base):
+    """RSA signing key for the Authorization-Server-issued JWTs.
+
+    At most one row has ``status='active'`` at any time; that's the key
+    used for new tokens. Rotation moves the old row to ``status='retiring'``
+    so its public JWK keeps appearing in ``/.well-known/jwks.json`` long
+    enough for previously-issued tokens to validate until they expire.
+    A janitor (analogous to :class:`AuditRetentionWorker`) demotes
+    ``retiring`` to ``revoked`` after ``2 * max_token_ttl``.
+
+    The private PEM is stored here only as a *fallback* — operators are
+    expected to set ``AUTHZ_OAUTH_SIGNING_KEY_PEM`` and mount it as a
+    Kubernetes / docker secret. See SECURITY.md.
+    """
+
+    __tablename__ = "oauth_signing_keys"
+    kid: Mapped[str] = mapped_column(String(64), primary_key=True)
+    alg: Mapped[str] = mapped_column(String(16), nullable=False, default="RS256")
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_pem: Mapped[str] = mapped_column(String(8192), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    rotated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Partial unique index: at most one row carries status='active' at a
+    # time. Defence in depth against a botched rotation (the rotate()
+    # path also takes a row-level lock).
+    __table_args__ = (
+        Index(
+            "uq_oauth_signing_keys_active",
+            "status",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
+
+
+class AdminSession(Base):
+    """Server-side session for an admin who logged in via OIDC.
+
+    The cookie value is the primary key (random 256-bit token); ``raw_claims``
+    keeps the verified id_token payload for audit. Janitor sweeps expired
+    rows hourly.
+    """
+
+    __tablename__ = "admin_sessions"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject: Mapped[str] = mapped_column(String(255), nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    issuer: Mapped[str] = mapped_column(String(512), nullable=False)
+    # CSV of internal-mapped scopes — usually just "admin".
+    scopes: Mapped[str] = mapped_column(String(512), nullable=False, default="admin")
+    raw_claims: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    csrf_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class AdminLoginAttempt(Base):
+    """In-flight OIDC login state (PKCE verifier + state + nonce).
+
+    Lives only between ``GET /oauth/login`` and ``GET /oauth/callback``;
+    a row's lifetime is typically seconds. Looked up by the
+    ``authz_login_id`` cookie so the verifier is never disclosed to the
+    browser. Rows older than ``expires_at`` are rejected and pruned by
+    the session janitor.
+    """
+
+    __tablename__ = "admin_login_attempts"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    code_verifier: Mapped[str] = mapped_column(String(255), nullable=False)
+    nonce: Mapped[str] = mapped_column(String(64), nullable=False)
+    return_to: Mapped[str] = mapped_column(String(512), nullable=False, default="/admin/")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class Invitation(Base):

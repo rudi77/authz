@@ -20,11 +20,12 @@ agent runtimes, and tool guards remain the Policy Enforcement Points.
 ## Status
 
 **v0.2 — pilot-ready.** Core decision engine is correct and well-tested
-(111 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
-multi-process state, audit retention, observability, container hardening,
-fail-closed defaults) are in. Customer-readiness gaps remaining:
-load-tested production deployment, SCIM, gRPC API, ReBAC, full admin
-console.
+(185 Python + 7 Go + 8 TS tests). Operational concerns (scoped API keys,
+OAuth 2.0 in three roles — Resource Server, Authorization Server,
+admin OIDC login — multi-process state, audit retention, observability,
+container hardening, fail-closed defaults) are in. Customer-readiness
+gaps remaining: load-tested production deployment, SCIM, gRPC API,
+ReBAC, full admin console.
 
 See [`SECURITY.md`](SECURITY.md) for the threat model, fail-closed
 semantics, and the production hardening checklist.
@@ -44,14 +45,18 @@ authzkit/        Reusable Python core library
   service/       Pydantic schemas shared with SDKs
   audit/         Audit logging primitives
 
-authzkit/security/  Scoped API keys + invitation flow
+authzkit/security/  Scoped API keys + invitation flow + OAuth 2.0
+                    (oauth_clients, oauth_resource, signing_keys, sessions,
+                     principal union)
 
 authz_service/   FastAPI Authorization Service
-  api/           REST routers (incl. api_keys, invitations)
+  api/           REST routers (incl. api_keys, invitations, oauth, oauth_clients)
   middleware.py  Rate limit + idempotency (in-memory or Redis)
   observability.py  structlog, Prometheus, optional OTel
   audit_retention.py  Background pruning worker
-  cli.py         `authz` CLI (schema, bootstrap, inspect)
+  oauth_janitor.py    Admin-session + retiring-signing-key sweepers
+  oauth_config.py     Issuer JSON parser
+  cli.py         `authz` CLI (schema, bootstrap, oauth, inspect)
   ui/            Static admin SPA served at /admin
   main.py        App factory + uvicorn entry point
 
@@ -71,8 +76,61 @@ tests/           Unit + integration tests (pytest)
 ```bash
 pip install -e .[dev]
 python examples/contract_ai_agent.py    # in-memory end-to-end demo
-pytest                                    # 111 tests, ~12s
+pytest                                    # 185 tests, ~40s
 ```
+
+## OAuth 2.0
+
+The service can be used in three OAuth roles, each independently toggleable
+and additive to the existing API-key auth (no breaking changes):
+
+| Role | Enable | What it gives you |
+|---|---|---|
+| **Resource Server** | `AUTHZ_OAUTH_RESOURCE_ISSUERS=<json>` | Accept Bearer JWTs from external IdPs (Entra, Cognito, Auth0, Keycloak, …) at all runtime + admin endpoints. Claims are mapped to internal `admin` / `runtime` / `tenant:<id>` scopes per issuer. |
+| **Authorization Server** | `AUTHZ_OAUTH_AS_ENABLED=true` + `AUTHZ_OAUTH_ISSUER` | Issue OAuth 2.0 tokens via `client_credentials` (RFC 6749 §4.4) so callers without an IdP get one short-lived JWT per call. RFC 8414 metadata at `/.well-known/oauth-authorization-server`, JWKS at `/.well-known/jwks.json`. Manage clients via `authz oauth client …`. |
+| **Admin-UI OIDC login** | `AUTHZ_ADMIN_OIDC_ISSUER` + `AUTHZ_ADMIN_OIDC_CLIENT_ID` + … | Admins sign in with their corporate IdP (Authorization Code + PKCE) instead of pasting API keys into the browser. Server-side sessions with CSRF; bridge to the existing admin scope via groups or email allow-list. |
+
+Minimal env shape for a Postgres deployment with all three on:
+
+```bash
+# Resource Server — accept JWTs from one external IdP
+AUTHZ_OAUTH_RESOURCE_ISSUERS='[{"issuer":"https://login.microsoftonline.com/<tid>/v2.0","audience":"api://authz","scope_claim":"scp","scope_map":{"AuthZ.Admin":"admin","AuthZ.Runtime":"runtime"},"tenant_claim":"tid"}]'
+
+# Authorization Server — issue our own tokens too
+AUTHZ_OAUTH_AS_ENABLED=true
+AUTHZ_OAUTH_ISSUER=https://authz.example.com
+AUTHZ_OAUTH_AUDIENCE=https://authz.example.com
+AUTHZ_OAUTH_ACCESS_TOKEN_TTL_SECONDS=3600
+AUTHZ_OAUTH_SIGNING_KEY_PEM=$(cat /run/secrets/authz_signing_key)
+
+# Admin OIDC for /admin
+AUTHZ_ADMIN_OIDC_ISSUER=https://login.example.com/realms/corp
+AUTHZ_ADMIN_OIDC_CLIENT_ID=authz-admin-ui
+AUTHZ_ADMIN_OIDC_CLIENT_SECRET=…
+AUTHZ_ADMIN_OIDC_REDIRECT_URI=https://authz.example.com/oauth/callback
+AUTHZ_ADMIN_OIDC_GROUPS_CLAIM=groups
+AUTHZ_ADMIN_OIDC_ADMIN_GROUPS=authz-admins,platform-ops
+```
+
+Smoke test for the Authorization Server role:
+
+```bash
+# Create a client (admin auth required — bootstrap key or session)
+authz oauth client create --name pep-runtime --scopes runtime
+
+# Mint a token
+curl -su "$CLIENT_ID:$CLIENT_SECRET" \
+  -d grant_type=client_credentials -d scope=runtime \
+  http://localhost:8080/oauth/token
+
+# Use the token on a runtime endpoint
+curl -H "Authorization: Bearer $TOKEN" -d '{…}' \
+  http://localhost:8080/v1/authorize
+```
+
+See `SECURITY.md` for the OAuth threat model (signing-key custody, bearer
+replay, scope downscoping, CSRF) and `OPEN_ITEMS.md` for the follow-ups
+(RFC 7662 introspection, RFC 7009 revocation, `jti` deny-list).
 
 ## CLI
 

@@ -207,6 +207,149 @@ def cmd_bootstrap(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# oauth — client + signing key management (runs locally, hits the DB directly)
+# ---------------------------------------------------------------------------
+
+
+def _local_store(args: argparse.Namespace):
+    """Build a SqlAlchemyStore against the configured DB URL."""
+    from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
+
+    url = args.database_url or os.environ.get(
+        "AUTHZ_DATABASE_URL", get_settings().database_url
+    )
+    engine = create_engine_from_url(url)
+    return SqlAlchemyStore(engine)
+
+
+def cmd_oauth_client_create(args: argparse.Namespace) -> None:
+    from authzkit.security.oauth_clients import OAuthClientService
+
+    store = _local_store(args)
+    service = OAuthClientService(store)
+    scopes = [s for s in args.scopes.split(",") if s.strip()]
+    credentials = service.issue(
+        name=args.name, scopes=scopes, tenant_id=args.tenant_id
+    )
+    print(
+        json.dumps(
+            {
+                "client_id": credentials.record.client_id,
+                "client_secret": credentials.client_secret,
+                "name": credentials.record.name,
+                "scopes": list(credentials.record.scopes),
+                "tenant_id": credentials.record.tenant_id,
+            },
+            indent=2,
+        )
+    )
+
+
+def cmd_oauth_client_list(args: argparse.Namespace) -> None:
+    from authzkit.security.oauth_clients import OAuthClientService
+
+    store = _local_store(args)
+    service = OAuthClientService(store)
+    rows = [
+        {
+            "client_id": r.client_id,
+            "name": r.name,
+            "scopes": list(r.scopes),
+            "tenant_id": r.tenant_id,
+            "status": r.status,
+            "last_used_at": r.last_used_at.isoformat() if r.last_used_at else None,
+        }
+        for r in service.list_clients()
+    ]
+    print(json.dumps(rows, indent=2))
+
+
+def cmd_oauth_client_revoke(args: argparse.Namespace) -> None:
+    from authzkit.security.oauth_clients import OAuthClientService
+
+    store = _local_store(args)
+    service = OAuthClientService(store)
+    if not service.revoke(args.client_id):
+        raise SystemExit(f"client_id not found: {args.client_id}")
+    print(f"revoked {args.client_id}")
+
+
+def cmd_oauth_client_rotate(args: argparse.Namespace) -> None:
+    from authzkit.security.oauth_clients import OAuthClientService
+
+    store = _local_store(args)
+    service = OAuthClientService(store)
+    credentials = service.rotate_secret(args.client_id)
+    if credentials is None:
+        raise SystemExit(f"client_id not found: {args.client_id}")
+    print(
+        json.dumps(
+            {
+                "client_id": credentials.record.client_id,
+                "client_secret": credentials.client_secret,
+            },
+            indent=2,
+        )
+    )
+
+
+def cmd_oauth_key_generate(args: argparse.Namespace) -> None:
+    """Generate a fresh RSA signing key and persist it as the active one."""
+    from authzkit.security.signing_keys import SigningKeyService
+
+    store = _local_store(args)
+    service = SigningKeyService(store, dev_mode=True, database_url="sqlite+pysqlite:")
+    # Force the generate path by leaving env_pem empty and pretending dev+sqlite
+    # so the safety guard accepts persistence regardless of the actual DSN —
+    # operators run this intentionally, the prod-DSN guard exists to prevent
+    # *accidental* generation at boot.
+    key = service._generate_and_persist()
+    print(
+        json.dumps(
+            {"kid": key.kid, "alg": key.alg, "status": key.status}, indent=2
+        )
+    )
+
+
+def cmd_oauth_key_rotate(args: argparse.Namespace) -> None:
+    from authz_service.config import get_settings
+    from authzkit.security.signing_keys import SigningKeyService
+
+    settings = get_settings()
+    store = _local_store(args)
+    service = SigningKeyService(
+        store,
+        env_pem=settings.oauth_signing_key_pem,
+        dev_mode=settings.dev_mode,
+        database_url=settings.database_url,
+    )
+    key = service.rotate()
+    print(
+        json.dumps(
+            {"kid": key.kid, "alg": key.alg, "status": key.status}, indent=2
+        )
+    )
+
+
+def cmd_oauth_key_list(args: argparse.Namespace) -> None:
+    from authzkit.security.signing_keys import SigningKeyService
+
+    store = _local_store(args)
+    service = SigningKeyService(store)
+    rows = [
+        {
+            "kid": k.kid,
+            "alg": k.alg,
+            "status": k.status,
+            "created_at": k.created_at.isoformat() if k.created_at else None,
+        }
+        for k in service.list_keys()
+    ]
+    print(json.dumps(rows, indent=2))
+
+
+# ---------------------------------------------------------------------------
 # inspect
 # ---------------------------------------------------------------------------
 
@@ -271,6 +414,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bootstrap.add_argument("--spec", required=True, help="YAML or JSON spec file")
     bootstrap.set_defaults(func=cmd_bootstrap)
+
+    # oauth
+    oauth = sub.add_parser("oauth", help="OAuth client + signing-key management")
+    oauth_sub = oauth.add_subparsers(dest="oauth_command", required=True)
+
+    oc = oauth_sub.add_parser("client", help="client_credentials clients")
+    oc_sub = oc.add_subparsers(dest="oauth_client_command", required=True)
+
+    oc_create = oc_sub.add_parser("create", help="Issue a new OAuth client")
+    oc_create.add_argument("--name", required=True)
+    oc_create.add_argument(
+        "--scopes", default="runtime", help="Comma-separated scopes (default: runtime)"
+    )
+    oc_create.add_argument("--tenant-id", default=None)
+    oc_create.add_argument("--database-url")
+    oc_create.set_defaults(func=cmd_oauth_client_create)
+
+    oc_list = oc_sub.add_parser("list", help="List OAuth clients")
+    oc_list.add_argument("--database-url")
+    oc_list.set_defaults(func=cmd_oauth_client_list)
+
+    oc_revoke = oc_sub.add_parser("revoke", help="Revoke an OAuth client")
+    oc_revoke.add_argument("client_id")
+    oc_revoke.add_argument("--database-url")
+    oc_revoke.set_defaults(func=cmd_oauth_client_revoke)
+
+    oc_rotate = oc_sub.add_parser("rotate", help="Rotate an OAuth client secret")
+    oc_rotate.add_argument("client_id")
+    oc_rotate.add_argument("--database-url")
+    oc_rotate.set_defaults(func=cmd_oauth_client_rotate)
+
+    sk = oauth_sub.add_parser("signing-key", help="JWT signing keys")
+    sk_sub = sk.add_subparsers(dest="signing_key_command", required=True)
+
+    sk_gen = sk_sub.add_parser("generate", help="Generate a new RSA-2048 signing key")
+    sk_gen.add_argument("--database-url")
+    sk_gen.set_defaults(func=cmd_oauth_key_generate)
+
+    sk_rot = sk_sub.add_parser(
+        "rotate", help="Rotate the active signing key (env-supplied keys: redeploy instead)"
+    )
+    sk_rot.add_argument("--database-url")
+    sk_rot.set_defaults(func=cmd_oauth_key_rotate)
+
+    sk_list = sk_sub.add_parser("list", help="List signing keys")
+    sk_list.add_argument("--database-url")
+    sk_list.set_defaults(func=cmd_oauth_key_list)
 
     # inspect
     inspect = sub.add_parser("inspect", help="Read-only checks")

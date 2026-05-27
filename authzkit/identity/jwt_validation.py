@@ -42,13 +42,16 @@ def _decode_json(response: httpx.Response, what: str) -> Any:
 class JWTValidatorConfig:
     """Per-issuer validation rules.
 
-    ``issuer`` and ``audience`` follow OIDC; ``jwks_url`` is auto-discovered
-    via ``{issuer}/.well-known/openid-configuration`` when not provided.
-    ``leeway_seconds`` covers small clock drift between this host and the IdP.
+    ``issuer`` and ``audience`` follow OIDC; ``audience`` may be a single
+    string or a tuple of acceptable audiences (PyJWT then accepts a token
+    whose ``aud`` claim matches any one of them). ``jwks_url`` is
+    auto-discovered via ``{issuer}/.well-known/openid-configuration``
+    when not provided. ``leeway_seconds`` covers small clock drift
+    between this host and the IdP.
     """
 
     issuer: str
-    audience: str | None = None
+    audience: str | tuple[str, ...] | None = None
     jwks_url: str | None = None
     algorithms: tuple[str, ...] = ("RS256", "ES256")
     leeway_seconds: int = 30
@@ -123,7 +126,6 @@ class JWTValidator:
     def validate(self, token: str, *, expected_issuer: str | None = None) -> dict[str, Any]:
         """Verify signature + claims and return the decoded payload."""
         import jwt
-        from jwt import PyJWKClient
 
         unverified = jwt.get_unverified_header(token)
         kid = unverified.get("kid")
@@ -156,15 +158,26 @@ class JWTValidator:
         if key is None:
             raise JWTValidationError(f"no JWKS key matches kid={kid}")
 
-        public_key = PyJWKClient._jwk_set_to_key(jwks, kid)  # type: ignore[attr-defined]
+        # PyJWK accepts a JWK dict directly. The previous code used a private
+        # ``_jwk_set_to_key`` helper that was removed in PyJWT 2.6+; the
+        # public API is preferred and works across the supported range.
+        public_key = jwt.PyJWK(key).key
 
         options = {"verify_aud": config.audience is not None}
+        # PyJWT accepts ``audience`` as str | Iterable[str]; a tuple here
+        # means "any of these audiences is acceptable" (the OIDC pattern
+        # for tokens that target multiple resource servers).
+        audience: Any = (
+            list(config.audience)
+            if isinstance(config.audience, tuple)
+            else config.audience
+        )
         try:
             return jwt.decode(
                 token,
                 key=public_key,
                 algorithms=list(config.algorithms),
-                audience=config.audience,
+                audience=audience,
                 issuer=config.issuer,
                 options=options,
                 leeway=config.leeway_seconds,

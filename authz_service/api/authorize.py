@@ -12,7 +12,7 @@ from authz_service.dependencies import (
     enforce_tenant_scope_binding,
     get_audit_sink,
     get_authorization_engine,
-    require_runtime_scope,
+    require_runtime,
 )
 from authz_service.observability import DECISION_LATENCY, record_decision
 from authzkit.audit.logger import AuditEntry
@@ -22,7 +22,7 @@ from authzkit.rbac.checker import (
     BulkAuthorizeRequest,
     Subject,
 )
-from authzkit.security.api_keys import ApiKeyRecord
+from authzkit.security.principal import Principal
 from authzkit.service.schemas import (
     AuthorizeRequestSchema,
     AuthorizeResponseSchema,
@@ -54,10 +54,10 @@ def authorize(
     request: AuthorizeRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
-    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
+    principal: Annotated[Principal, Depends(require_runtime)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> AuthorizeResponseSchema:
-    enforce_tenant_scope_binding(api_key, request.tenant_id)
+    enforce_tenant_scope_binding(principal, request.tenant_id)
     with DECISION_LATENCY.labels("authorize").time():
         decision = engine.authorize(
             AuthorizeRequest(
@@ -109,10 +109,10 @@ def bulk_authorize(
     request: BulkAuthorizeRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
     audit: Annotated[AuditSink, Depends(get_audit_sink)],
-    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
+    principal: Annotated[Principal, Depends(require_runtime)],
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
 ) -> BulkAuthorizeResponseSchema:
-    enforce_tenant_scope_binding(api_key, request.tenant_id)
+    enforce_tenant_scope_binding(principal, request.tenant_id)
     with DECISION_LATENCY.labels("bulk-authorize").time():
         decisions = engine.bulk_authorize(
             BulkAuthorizeRequest(
@@ -167,9 +167,9 @@ def bulk_authorize(
 def effective_permissions(
     request: EffectivePermissionsRequestSchema,
     engine: Annotated[AuthorizationEngine, Depends(get_authorization_engine)],
-    api_key: Annotated[ApiKeyRecord, Depends(require_runtime_scope)],
+    principal: Annotated[Principal, Depends(require_runtime)],
 ) -> EffectivePermissionsResponseSchema:
-    enforce_tenant_scope_binding(api_key, request.tenant_id)
+    enforce_tenant_scope_binding(principal, request.tenant_id)
     permissions = engine.effective_permissions(
         tenant_id=request.tenant_id,
         application_id=request.application_id,

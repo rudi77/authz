@@ -71,6 +71,125 @@ class Settings:
         in ("true", "1", "yes")
     )
 
+    # ------------------------------------------------------------------
+    # OAuth 2.0 — Resource Server (accept JWT-Bearer from external IdPs)
+    # ------------------------------------------------------------------
+    # Auto-enabled when issuers are configured. Set explicitly to false to
+    # disable even if issuers are present (useful for staged rollout).
+    oauth_resource_enabled: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_RESOURCE_ENABLED", "auto").lower()
+    )
+    # Primary configuration: JSON array (see authz_service/oauth_config.py).
+    # Tolerant to whitespace; empty string == no issuers.
+    oauth_resource_issuers_json: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_RESOURCE_ISSUERS", "")
+    )
+    # Alternative: load the same JSON from a file (for long configs / Kubernetes ConfigMap).
+    oauth_resource_issuers_file: str | None = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_RESOURCE_ISSUERS_FILE") or None
+    )
+    oauth_jwks_cache_ttl_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_OAUTH_JWKS_CACHE_TTL_SECONDS", "600")
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # OAuth 2.0 — Authorization Server (issue tokens via client_credentials)
+    # ------------------------------------------------------------------
+    oauth_as_enabled: bool = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_AS_ENABLED", "false").lower()
+        == "true"
+    )
+    oauth_issuer: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_ISSUER", "")
+    )
+    # Default audience = issuer. CSV for multi-audience tokens.
+    oauth_audience: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_AUDIENCE", "")
+    )
+    oauth_access_token_ttl_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_OAUTH_ACCESS_TOKEN_TTL_SECONDS", "3600")
+        )
+    )
+    # PEM-encoded RSA private key. When set, this is the signing key.
+    # When unset, the SigningKeyService falls back to the DB-backed table
+    # and, in dev-mode + SQLite, will auto-generate an ephemeral key.
+    oauth_signing_key_pem: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_OAUTH_SIGNING_KEY_PEM", "")
+    )
+    oauth_signing_key_rotation_days: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_OAUTH_SIGNING_KEY_ROTATION_DAYS", "90")
+        )
+    )
+
+    # ------------------------------------------------------------------
+    # OIDC login for /admin (Authorization Code + PKCE)
+    # ------------------------------------------------------------------
+    admin_oidc_enabled: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_ENABLED", "auto").lower()
+    )
+    admin_oidc_issuer: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_ISSUER", "")
+    )
+    admin_oidc_client_id: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_CLIENT_ID", "")
+    )
+    admin_oidc_client_secret: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_CLIENT_SECRET", "")
+    )
+    admin_oidc_redirect_uri: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_REDIRECT_URI", "")
+    )
+    admin_oidc_scopes: str = field(
+        default_factory=lambda: os.environ.get(
+            "AUTHZ_ADMIN_OIDC_SCOPES", "openid email profile"
+        )
+    )
+    admin_oidc_groups_claim: str = field(
+        default_factory=lambda: os.environ.get("AUTHZ_ADMIN_OIDC_GROUPS_CLAIM", "groups")
+    )
+    admin_oidc_admin_groups: tuple[str, ...] = field(
+        default_factory=lambda: _csv_env("AUTHZ_ADMIN_OIDC_ADMIN_GROUPS")
+    )
+    admin_oidc_email_allowlist: tuple[str, ...] = field(
+        default_factory=lambda: _csv_env("AUTHZ_ADMIN_OIDC_EMAIL_ALLOWLIST")
+    )
+    admin_oidc_session_ttl_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_ADMIN_OIDC_SESSION_TTL_SECONDS", "28800")
+        )
+    )
+
+
+def oauth_resource_is_enabled(settings: Settings) -> bool:
+    """Resolve the OAuth Resource-Server enable flag.
+
+    ``true`` / ``false`` force; ``auto`` (default) is on iff issuers are
+    configured. We intentionally do not enable RS without issuers — the
+    request would just 401 every Bearer-JWT call with no clear reason.
+    """
+    raw = settings.oauth_resource_enabled.lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return bool(settings.oauth_resource_issuers_json.strip()) or bool(
+        settings.oauth_resource_issuers_file
+    )
+
+
+def admin_oidc_is_enabled(settings: Settings) -> bool:
+    """Resolve the Admin-UI OIDC enable flag (analogous to oauth_resource)."""
+    raw = settings.admin_oidc_enabled.lower()
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    return bool(settings.admin_oidc_issuer and settings.admin_oidc_client_id)
+
 
 _settings: Settings | None = None
 

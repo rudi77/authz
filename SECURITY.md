@@ -55,7 +55,13 @@ Out of scope:
 | Schema drift from operator surprise | Non-SQLite databases never auto-migrate; the service refuses to mutate the schema and defers to Alembic. |
 | Admin UI as an XSS staging point | UI is documented as a developer tool; API key default storage is `sessionStorage` (per-tab); a banner spells out the trade-off. |
 | Replay of an old request with a new credential | Idempotency cache fingerprint encodes which header carried the credential, so X-API-Key and Authorization: Bearer cannot collide. |
-| Resource exhaustion via runaway client | Per-key `AUTHZ_RATE_LIMIT_PER_MINUTE`; Redis-backed when running multi-process. |
+| Resource exhaustion via runaway client | Per-key `AUTHZ_RATE_LIMIT_PER_MINUTE`; Redis-backed when running multi-process. `POST /oauth/token` is bucketed per `client_id` so one rogue client cannot crowd out the rest. |
+| Forged or expired OAuth Bearer JWT | Each token is verified against its issuer's JWKS (signature, `iss`, `aud`, `exp`, `nbf`) before any scope check. Unknown issuers, unknown `kid`, or audience mismatches return `401` with an RFC 6750 `WWW-Authenticate: Bearer error="invalid_token"` header. |
+| Compromised service signing key | RS256 / 2048-bit; env-supplied (`AUTHZ_OAUTH_SIGNING_KEY_PEM`) takes precedence over DB material so the secret can live in Kubernetes / docker secrets, never in the database. Rotation (`POST /v1/oauth/signing-keys/rotate`) demotes the old key to `retiring` so previously-issued tokens keep validating until expiry. Ephemeral dev keys are gated to SQLite DSNs only. |
+| Replayed OAuth Bearer JWT | Default TTL `3600s` via `AUTHZ_OAUTH_ACCESS_TOKEN_TTL_SECONDS`; shorten where leak windows must be tighter. Token contains `jti` for future deny-list use (RFC 7009 revocation tracked as a follow-up in `OPEN_ITEMS.md`). |
+| Cross-tenant scope escape via downscoped client | Tenant-bound OAuth clients can never receive a `tenant:<other>` scope; the token endpoint rejects with `invalid_scope`. Covered by an explicit regression test in `tests/integration/test_oauth_authorization_server.py`. |
+| CSRF against an admin OIDC session | Server-side sessions carry a per-session CSRF token; mutating session-authenticated requests must echo it in `X-CSRF-Token`. API-key and Bearer-JWT callers (which the browser cannot attach cross-origin) are exempt. |
+| OIDC login replay / CSRF | `state` (32-byte urlsafe) bound to a short-lived `authz_login_id` HttpOnly cookie; `nonce` validated against the returned id_token; PKCE S256 mandatory. The in-flight row is deleted on first consume so a leaked cookie can't be reused. |
 
 ## Fail-closed semantics
 
@@ -66,16 +72,24 @@ The flags:
 - `AUTHZ_DEV_MODE=true` is the **only** way to opt into permissive
   behaviour. It allows two things:
   1. Accept any caller when neither `AUTHZ_API_KEYS` nor any active
-     DB-backed key is configured.
+     DB-backed key is configured, **and** no OAuth issuers and no
+     admin OIDC are configured. The bypass disengages as soon as any
+     one of those auth sources appears — the same auto-lock semantics
+     that apply to the first DB key now apply across the full set of
+     auth surfaces.
   2. Use `AUTHZ_CORS_ORIGINS=*`.
 - Without `AUTHZ_DEV_MODE`, missing keys → every request returns
   `401 missing_or_invalid_api_key`.
 - Without `AUTHZ_DEV_MODE`, `AUTHZ_CORS_ORIGINS=*` → the service
   refuses to start.
-- The first DB-backed key auto-locks the service even if
-  `AUTHZ_DEV_MODE=true` is still set; after that, real keys are
+- The first DB-backed key, the first OAuth issuer, or the first
+  configured admin OIDC issuer auto-locks the service even if
+  `AUTHZ_DEV_MODE=true` is still set; after that, real credentials are
   required regardless of the flag. This is intentional so a forgotten
   test deployment locks itself down on first real provisioning.
+- `AUTHZ_OAUTH_AS_ENABLED=true` without a usable signing key fails
+  closed at first call to `/oauth/token` — the service logs a warning
+  at startup but does not exit, so the rest of the surface stays up.
 - Schema management on non-SQLite databases is fail-closed:
   `AUTHZ_AUTO_CREATE_SCHEMA=auto` (the default) skips auto-create; you
   must run `alembic upgrade head` explicitly.
@@ -197,8 +211,24 @@ PEP-side caches (Python SDK `cache_ttl_seconds`, Go SDK
   `hmac.compare_digest`.
 - Invitation tokens: 32 bytes of `secrets.token_urlsafe`, hashed at
   rest, single-use, expiring.
+- OAuth client secrets: 32 bytes of `secrets.token_urlsafe`, prefixed
+  with `ocs_`. Hashed with SHA-256 at rest. Compared with
+  `hmac.compare_digest`. The authentication path runs the hash even
+  on miss to keep the timing flat against probing for client IDs.
+- OAuth signing keys: RSA-2048 generated with `cryptography`'s
+  `rsa.generate_private_key(public_exponent=65537, ...)`. PEM material
+  is stored in `oauth_signing_keys.private_pem` only as a fallback —
+  operators are expected to supply `AUTHZ_OAUTH_SIGNING_KEY_PEM` via
+  a Kubernetes Secret / docker secret so the DB never sees it. Where
+  DB storage is used, encrypt the column at rest (e.g. Postgres
+  `pgcrypto`) or wrap with an external KMS.
+- Admin session cookies: 256-bit random tokens (`secrets.token_urlsafe(32)`),
+  set HttpOnly + Secure + SameSite=Lax. The CSRF token is a separate
+  192-bit random value stored alongside the session.
+- PKCE: S256 challenge (`base64url(sha256(verifier))`), RFC 7636
+  compliant; verifier is 64 bytes of `secrets.token_urlsafe`.
 - No bespoke crypto. We do not roll our own primitives; we use the
-  Python standard library.
+  Python standard library and `cryptography` for RSA.
 
 ## Known limitations
 
