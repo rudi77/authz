@@ -33,6 +33,13 @@ class TenancyRepository(Protocol):
 
     # Users + External Identities
     def get_user(self, user_id: str) -> User | None: ...
+    def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+    ) -> User: ...
     def find_user_by_external_identity(
         self, provider: str, issuer: str, subject: str
     ) -> User | None: ...
@@ -66,6 +73,15 @@ class TenancyRepository(Protocol):
     ) -> Membership | None: ...
     def list_memberships_for_user(self, user_id: str) -> list[Membership]: ...
     def create_membership(
+        self,
+        *,
+        tenant_id: str,
+        application_id: str | None,
+        user_id: str,
+        status: str = "active",
+        roles: set[str] | None = None,
+    ) -> Membership: ...
+    def upsert_membership(
         self,
         *,
         tenant_id: str,

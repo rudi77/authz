@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import Engine, create_engine, delete, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from authzkit.agents.models import Agent as AgentModel
@@ -202,6 +203,41 @@ class SqlAlchemyStore:
             row = s.get(orm.User, user_id)
             return self._to_user(row) if row else None
 
+    def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+    ) -> UserModel:
+        """Create a user with an explicit id, or update its profile fields.
+
+        Unlike :meth:`upsert_user_from_identity` (which mints a random id), this
+        keys the user on a caller-supplied id — used when an upstream system is
+        the identity authority and provisions memberships under its own user ids.
+
+        Race-safe: if a concurrent caller inserts the same id between the lookup
+        and the commit, the resulting IntegrityError is reconciled to an update.
+        """
+        with self.session() as s:
+            row = s.get(orm.User, user_id)
+            if row is None:
+                s.add(orm.User(id=user_id, display_name=display_name, email=email))
+                try:
+                    s.commit()
+                    return self._to_user(s.get(orm.User, user_id))
+                except IntegrityError:
+                    s.rollback()
+                    row = s.get(orm.User, user_id)
+                    if row is None:
+                        raise
+            if display_name is not None:
+                row.display_name = display_name
+            if email is not None:
+                row.email = email
+            s.commit()
+            return self._to_user(row)
+
     def find_user_by_external_identity(
         self, provider: str, issuer: str, subject: str
     ) -> UserModel | None:
@@ -345,6 +381,51 @@ class SqlAlchemyStore:
                         )
                     )
             s.commit()
+            names = self.membership_role_names(s, row.id)
+            return self._to_membership(row, names)
+
+    def upsert_membership(
+        self,
+        *,
+        tenant_id: str,
+        application_id: str | None,
+        user_id: str,
+        status: str = MEMBERSHIP_STATUS_ACTIVE,
+        roles: set[str] | None = None,
+    ) -> MembershipModel:
+        """Create the (tenant, application, user) membership or update it in place.
+
+        Idempotent: re-provisioning the same triple updates status + roles
+        instead of duplicating. Read-then-write rather than a dialect upsert;
+        a concurrent first-write that trips the
+        ``UNIQUE (tenant_id, application_id, user_id)`` constraint is caught and
+        reconciled to an in-place update.
+        """
+        existing = self.get_membership(
+            tenant_id=tenant_id, application_id=application_id, user_id=user_id
+        )
+        if existing is None:
+            try:
+                return self.create_membership(
+                    tenant_id=tenant_id,
+                    application_id=application_id,
+                    user_id=user_id,
+                    status=status,
+                    roles=roles,
+                )
+            except IntegrityError:
+                existing = self.get_membership(
+                    tenant_id=tenant_id, application_id=application_id, user_id=user_id
+                )
+                if existing is None:
+                    raise
+        with self.session() as s:
+            row = s.get(orm.Membership, existing.id)
+            row.status = status
+            s.commit()
+        self.set_membership_roles(existing.id, roles or set())
+        with self.session() as s:
+            row = s.get(orm.Membership, existing.id)
             names = self.membership_role_names(s, row.id)
             return self._to_membership(row, names)
 

@@ -38,6 +38,21 @@ class MembershipPatch(BaseModel):
     status: str | None = None
 
 
+class MembershipProvisionIn(BaseModel):
+    """Idempotent provisioning payload for the PUT upsert endpoint.
+
+    ``display_name`` / ``email`` let an upstream identity authority create the
+    user row under its own (explicit) user id on first sight.
+    """
+
+    user_id: str
+    application_id: str | None = None
+    roles: list[str] = []
+    status: str = "active"
+    display_name: str | None = None
+    email: str | None = None
+
+
 @router.post(
     "/tenants/{tenant_id}/memberships",
     response_model=MembershipOut,
@@ -61,6 +76,56 @@ def create_membership(
             raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
         application_id = app.id
     membership = store.create_membership(
+        tenant_id=tenant.id,
+        application_id=application_id,
+        user_id=body.user_id,
+        roles=set(body.roles) or None,
+        status=body.status,
+    )
+    return MembershipOut(
+        id=membership.id,
+        tenant_id=membership.tenant_id,
+        application_id=membership.application_id,
+        user_id=membership.user_id,
+        roles=sorted(membership.roles),
+        status=membership.status,
+    )
+
+
+@router.put(
+    "/tenants/{tenant_id}/memberships",
+    response_model=MembershipOut,
+    dependencies=[Depends(require_admin_scope)],
+)
+def provision_membership(
+    tenant_id: str,
+    body: MembershipProvisionIn,
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+) -> MembershipOut:
+    """Idempotently provision a user + membership keyed by an explicit user id.
+
+    For integrations where an upstream system owns identity and mirrors its
+    authoritative membership decision here: the user is created under the
+    caller-supplied ``user_id`` if absent, and the (tenant, application, user)
+    membership is created or updated in place. Safe to call on every login.
+    """
+    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    application_id = None
+    if body.application_id:
+        app = store.get_application(body.application_id) or store.get_application_by_slug(
+            body.application_id
+        )
+        if app is None:
+            raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+        application_id = app.id
+    store.upsert_user(
+        user_id=body.user_id,
+        display_name=body.display_name,
+        email=body.email,
+    )
+    membership = store.upsert_membership(
         tenant_id=tenant.id,
         application_id=application_id,
         user_id=body.user_id,

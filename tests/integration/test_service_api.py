@@ -145,6 +145,129 @@ def test_resolve_context_creates_user_and_returns_permissions(client: TestClient
     assert "contracts.read" in body["permissions"]
 
 
+def test_provision_membership_idempotent_with_explicit_user_id(client: TestClient):
+    """PUT upserts a user under a caller-supplied id + an active membership.
+
+    Mirrors the platform integration: an upstream system owns identity and
+    provisions a membership keyed by its own user GUID, then authorizes using
+    that exact id as the subject. Re-provisioning is idempotent.
+    """
+    tenant, app, _role = _seed_basic(client)
+    other = client.post(
+        f"/v1/applications/{app['id']}/roles",
+        json={"name": "auditor", "scope": "application"},
+        headers=HEADERS,
+    ).json()
+    client.put(
+        f"/v1/roles/{other['id']}/permissions",
+        json={"permissions": ["contracts.classify"]},
+        headers=HEADERS,
+    )
+
+    explicit_user_id = "114ff872-0000-0000-0000-000000000001"
+
+    first = client.put(
+        f"/v1/tenants/{tenant['id']}/memberships",
+        json={
+            "user_id": explicit_user_id,
+            "application_id": app["id"],
+            "roles": ["legal_reviewer"],
+            "display_name": "test-user",
+            "email": "user@example.test",
+        },
+        headers=HEADERS,
+    )
+    assert first.status_code == 200
+    body = first.json()
+    membership_id = body["id"]
+    assert body["user_id"] == explicit_user_id
+    assert body["status"] == "active"
+    assert body["roles"] == ["legal_reviewer"]
+
+    # The user row exists under the explicit id (not a random uuid).
+    from authz_service.config import get_settings
+    from authzkit.storage.sqlalchemy import SqlAlchemyStore, create_engine_from_url
+
+    store = SqlAlchemyStore(create_engine_from_url(get_settings().database_url))
+    user = store.get_user(explicit_user_id)
+    assert user is not None
+    assert user.email == "user@example.test"
+
+    # Authorize succeeds using that exact explicit user id as the subject —
+    # this is the runtime path the platform's authorize call exercises.
+    allow = client.post(
+        "/v1/authorize",
+        json={
+            "tenant_id": tenant["id"],
+            "application_id": app["id"],
+            "subject": {"type": "user", "user_id": explicit_user_id},
+            "resource": "contracts",
+            "action": "read",
+        },
+        headers=HEADERS,
+    )
+    assert allow.json()["allowed"] is True
+
+    # Second PUT: idempotent — same membership row, roles replaced, no duplicate.
+    second = client.put(
+        f"/v1/tenants/{tenant['id']}/memberships",
+        json={
+            "user_id": explicit_user_id,
+            "application_id": app["id"],
+            "roles": ["auditor"],
+        },
+        headers=HEADERS,
+    )
+    assert second.status_code == 200
+    body2 = second.json()
+    assert body2["id"] == membership_id
+    assert body2["roles"] == ["auditor"]
+
+    listed = client.get(
+        f"/v1/tenants/{tenant['id']}/memberships", headers=HEADERS
+    ).json()
+    assert sum(1 for m in listed if m["user_id"] == explicit_user_id) == 1
+
+
+def test_provision_membership_unknown_tenant_404(client: TestClient):
+    _tenant, app, _role = _seed_basic(client)
+    resp = client.put(
+        "/v1/tenants/00000000-0000-0000-0000-0000000000ff/memberships",
+        json={
+            "user_id": "114ff872-0000-0000-0000-000000000002",
+            "application_id": app["id"],
+            "roles": ["legal_reviewer"],
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 404
+    assert resp.json()["detail"]["reason"] == "tenant_not_found"
+
+
+def test_provision_membership_keeps_only_known_roles(client: TestClient):
+    """Role names with no matching Role for the app are silently dropped.
+
+    This is the failure mode the runtime guards against by warning when fewer
+    roles come back than were sent: a membership provisioned with role names the
+    authz tenant doesn't define ends up with the known subset only.
+    """
+    tenant, app, _role = _seed_basic(client)
+    explicit_user_id = "114ff872-0000-0000-0000-000000000003"
+
+    resp = client.put(
+        f"/v1/tenants/{tenant['id']}/memberships",
+        json={
+            "user_id": explicit_user_id,
+            "application_id": app["id"],
+            "roles": ["legal_reviewer", "role_that_does_not_exist"],
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    # Known role kept, unknown one dropped — not invented, not an error.
+    assert resp.json()["roles"] == ["legal_reviewer"]
+
+
 def test_authorize_allow_and_deny(client: TestClient):
     tenant, app, _ = _seed_basic(client)
     # Provision user + membership directly.

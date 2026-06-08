@@ -87,6 +87,31 @@ class InMemoryStore:
     def get_user(self, user_id: str) -> User | None:
         return self.users.get(user_id)
 
+    def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+    ) -> User:
+        existing = self.users.get(user_id)
+        if existing is None:
+            user = User(
+                id=user_id, display_name=display_name, email=email, status="active"
+            )
+            self.users[user_id] = user
+            return user
+        if display_name is not None or email is not None:
+            existing = replace(
+                existing,
+                display_name=display_name
+                if display_name is not None
+                else existing.display_name,
+                email=email if email is not None else existing.email,
+            )
+            self.users[user_id] = existing
+        return existing
+
     def find_user_by_external_identity(
         self, provider: str, issuer: str, subject: str
     ) -> User | None:
@@ -174,22 +199,50 @@ class InMemoryStore:
         status: str = MEMBERSHIP_STATUS_ACTIVE,
         roles: set[str] | None = None,
     ) -> Membership:
+        # Only roles that resolve to a real Role for this application are kept,
+        # matching SqlAlchemyStore (which reads roles back from the join table).
+        role_ids: set[str] = set()
+        resolved_names: set[str] = set()
+        for name in roles or set():
+            rid = self._role_id_by_name(application_id, name)
+            if rid is not None:
+                role_ids.add(rid)
+                resolved_names.add(name)
         membership = Membership(
             id=_new_id(),
             tenant_id=tenant_id,
             application_id=application_id,
             user_id=user_id,
             status=status,
-            roles=frozenset(roles or set()),
+            roles=frozenset(resolved_names),
         )
         self.memberships[membership.id] = membership
-        if roles:
-            role_ids = {self._role_id_by_name(application_id, name) for name in roles}
-            role_ids.discard(None)
-            self.membership_roles[membership.id] = {r for r in role_ids if r}
-        else:
-            self.membership_roles[membership.id] = set()
+        self.membership_roles[membership.id] = role_ids
         return membership
+
+    def upsert_membership(
+        self,
+        *,
+        tenant_id: str,
+        application_id: str | None,
+        user_id: str,
+        status: str = MEMBERSHIP_STATUS_ACTIVE,
+        roles: set[str] | None = None,
+    ) -> Membership:
+        existing = self.get_membership(
+            tenant_id=tenant_id, application_id=application_id, user_id=user_id
+        )
+        if existing is None:
+            return self.create_membership(
+                tenant_id=tenant_id,
+                application_id=application_id,
+                user_id=user_id,
+                status=status,
+                roles=roles,
+            )
+        self.memberships[existing.id] = replace(existing, status=status)
+        self.set_membership_roles(existing.id, roles or set())
+        return self.memberships[existing.id]
 
     def get_membership(
         self, *, tenant_id: str, application_id: str | None, user_id: str
@@ -209,12 +262,15 @@ class InMemoryStore:
     def set_membership_roles(self, membership_id: str, role_names: set[str]) -> None:
         membership = self.memberships[membership_id]
         role_ids: set[str] = set()
+        resolved_names: set[str] = set()
         for name in role_names:
             rid = self._role_id_by_name(membership.application_id, name)
             if rid is not None:
                 role_ids.add(rid)
+                resolved_names.add(name)
         self.membership_roles[membership_id] = role_ids
-        self.memberships[membership_id] = replace(membership, roles=frozenset(role_names))
+        # Keep only resolved names, matching SqlAlchemyStore's read-back behavior.
+        self.memberships[membership_id] = replace(membership, roles=frozenset(resolved_names))
 
     def is_user_membership_active(
         self, *, tenant_id: str, application_id: str, user_id: str
