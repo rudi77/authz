@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — Admin console redesign
+
+- Rebuilt `/admin` as a proper console: sign-in screen (SSO or API key)
+  instead of a key field in the header, dark sidebar with icons, tenant /
+  application switcher in the top bar, page headers with primary actions.
+- Create / edit flows moved into dialogs; roles and permissions are picked
+  from checklists instead of typed as comma-separated text, so unknown role
+  names can no longer be silently ignored.
+- Overview page with stats, a setup checklist and recent denies; empty
+  states with next steps; relative timestamps; copyable short ids; toasts.
+- Decision probe shows a clear Allowed / Denied verdict; delegation issuance
+  shows the delegable set live and the one-time token with a copy button.
+- Light and dark mode, responsive down to phone width. Still no build step
+  and no external assets, so it works offline inside the Docker image.
+
 ## Unreleased — Delegation grants for agents
 
 Additive: no existing endpoint, request, response or default behaviour
