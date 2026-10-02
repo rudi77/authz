@@ -37,6 +37,9 @@ class AuthorizeRequest:
     resource: str
     action: str
     context: dict[str, Any] = field(default_factory=dict)
+    # Permission subset from a verified delegation grant. ``None`` (default)
+    # means no grant — the decision is exactly the pre-delegation behaviour.
+    delegated_permissions: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -46,6 +49,7 @@ class BulkAuthorizeRequest:
     subject: Subject
     checks: list[tuple[str, str]]  # [(resource, action), ...]
     context: dict[str, Any] = field(default_factory=dict)
+    delegated_permissions: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -108,8 +112,14 @@ class AuthorizationEngine:
         # permission set that's still non-empty; we treat None-equivalent as
         # "no mask configured."
         effective = permissions & tenant_permissions if tenant_permissions else permissions
+        undelegated = effective
+        if request.delegated_permissions is not None:
+            effective = effective & request.delegated_permissions
 
         if required not in effective:
+            # The subject could do it, but the delegation grant doesn't cover it.
+            if required in undelegated:
+                return AuthorizeDecision.deny("not_delegated", required)
             # Disambiguate: was it a tenant-feature mask, or just missing perm?
             if (
                 tenant_permissions
@@ -158,6 +168,9 @@ class AuthorizationEngine:
             tenant_id=request.tenant_id, application_id=request.application_id
         )
         effective = subject_perms & tenant_permissions if tenant_permissions else subject_perms
+        undelegated = effective
+        if request.delegated_permissions is not None:
+            effective = effective & request.delegated_permissions
 
         results: list[AuthorizeDecision] = []
         for resource, action in request.checks:
@@ -183,7 +196,9 @@ class AuthorizationEngine:
                 results.append(AuthorizeDecision.allow(required, {required}))
                 continue
 
-            if (
+            if required in undelegated:
+                results.append(AuthorizeDecision.deny("not_delegated", required))
+            elif (
                 tenant_permissions
                 and required in subject_perms
                 and required not in tenant_permissions
@@ -215,13 +230,29 @@ class AuthorizationEngine:
         return result
 
     def effective_permissions(
-        self, *, tenant_id: str, application_id: str, subject: Subject
+        self,
+        *,
+        tenant_id: str,
+        application_id: str,
+        subject: Subject,
+        delegated_permissions: frozenset[str] | None = None,
     ) -> set[str]:
         """Return the set the subject can hit at this exact moment.
 
-        Reflects tenant masks but does not run ABAC — those are evaluated
-        per-action because they depend on the resource attributes.
+        Reflects tenant masks (and a delegation grant's subset, when given)
+        but does not run ABAC — those are evaluated per-action because they
+        depend on the resource attributes.
         """
+        permissions = self._effective_permissions(
+            tenant_id=tenant_id, application_id=application_id, subject=subject
+        )
+        if delegated_permissions is not None:
+            return permissions & delegated_permissions
+        return permissions
+
+    def _effective_permissions(
+        self, *, tenant_id: str, application_id: str, subject: Subject
+    ) -> set[str]:
         if not self.repository.is_tenant_active(tenant_id):
             return set()
         if not self.repository.is_application_active(application_id):

@@ -9,6 +9,17 @@ Status legend: 🟥 blocker for GA · 🟧 needed for first paying customer ·
 
 ---
 
+## Recently closed (2026-10 delegation grants)
+
+| Item | What landed | Files |
+|---|---|---|
+| Per-run agent delegation | Signed, revocable, time-boxed grants (`user ∩ agent ∩ mask ∩ grant`), opt-in `X-Delegation-Token`, kill switch, introspection + JWKS, UI panel | `authzkit/security/delegations.py`, `authz_service/api/delegations.py` |
+
+Follow-ups (🟨): Go / TypeScript SDK wrappers for the delegation endpoints;
+proof-of-user at issuance (accept the user's IdP token and bind the grant
+to it, instead of trusting the runtime caller); human-in-the-loop approval
+as a third decision outcome; `from` / `to` filters on `GET /v1/audit`.
+
 ## Recently closed (2026-05 OAuth 2.0 rollout)
 
 Single-PR landing of the three OAuth roles. Items previously listed as

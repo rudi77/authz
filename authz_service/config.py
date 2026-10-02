@@ -126,6 +126,27 @@ class Settings:
     )
 
     # ------------------------------------------------------------------
+    # Delegation grants (user → agent, signed JWT, opt-in)
+    # ------------------------------------------------------------------
+    delegation_default_ttl_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_DELEGATION_DEFAULT_TTL_SECONDS", "3600")
+        )
+    )
+    delegation_max_ttl_seconds: int = field(
+        default_factory=lambda: int(
+            os.environ.get("AUTHZ_DELEGATION_MAX_TTL_SECONDS", "86400")
+        )
+    )
+    # When true, agent-subject decisions without a valid X-Delegation-Token
+    # are denied with ``delegation_required``. Off by default so existing
+    # callers keep working unchanged.
+    delegation_required: bool = field(
+        default_factory=lambda: os.environ.get("AUTHZ_DELEGATION_REQUIRED", "false").lower()
+        == "true"
+    )
+
+    # ------------------------------------------------------------------
     # OIDC login for /admin (Authorization Code + PKCE)
     # ------------------------------------------------------------------
     admin_oidc_enabled: str = field(

@@ -48,6 +48,7 @@ from authzkit.security.api_keys import (
     scope_allows,
     tenant_scope_matches,
 )
+from authzkit.security.delegations import DelegationService
 from authzkit.security.invitations import InvitationService
 from authzkit.security.oauth_clients import OAuthClientService
 from authzkit.security.oauth_resource import JwtResolver
@@ -132,6 +133,15 @@ def get_signing_key_service(
             database_url=settings.database_url,
         )
     return _signing_key_service
+
+
+def get_delegation_service(
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    signing_keys: Annotated[SigningKeyService, Depends(get_signing_key_service)],
+) -> DelegationService:
+    """Delegation grants share the AS signing keys (one JWKS for both)."""
+    return DelegationService(store, signing_keys, issuer=settings.oauth_issuer)
 
 
 def get_admin_session_service(

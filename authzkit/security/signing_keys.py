@@ -149,6 +149,18 @@ class SigningKeyService:
             "or run `authz oauth signing-key generate`."
         )
 
+    def generate_if_missing(self) -> SigningKey:
+        """Return the active key, generating + persisting one if none exists.
+
+        The caller owns the policy decision (e.g. only on SQLite); this
+        method never runs implicitly from :meth:`active_signing_key`.
+        """
+        try:
+            return self.active_signing_key()
+        except SigningKeyError:
+            self._cached = self._generate_and_persist()
+            return self._cached
+
     def _load_env_key(self) -> SigningKey:
         kid = _derive_kid(self._env_pem)
         jwk = _public_jwk_from_pem(self._env_pem, kid)

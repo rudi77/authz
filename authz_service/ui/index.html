@@ -59,6 +59,7 @@
       <button class="nav-item" data-panel="memberships">Memberships</button>
       <button class="nav-item" data-panel="agents">Agents</button>
       <button class="nav-item" data-panel="invitations">Invitations</button>
+      <button class="nav-item" data-panel="delegations">Delegations</button>
       <div class="nav-group">Tenant settings</div>
       <button class="nav-item" data-panel="features">Feature mask &amp; flags</button>
       <div class="nav-group">Decisions</div>
@@ -257,6 +258,40 @@
         </tr></thead><tbody></tbody></table>
       </section>
 
+      <!-- Delegations -->
+      <section id="panel-delegations" class="panel">
+        <h2>Delegations <small class="muted" data-ctx="both"></small></h2>
+        <p class="hint">A grant lets one agent act for one user, for one task, until it expires —
+          with only the permissions ticked below (always within <code>user ∩ agent</code>). The
+          agent runtime sends it as <code>X-Delegation-Token</code>; revoking it takes effect on the
+          next check.</p>
+        <form id="form-delegation" class="form-row form-row--wrap">
+          <select name="user_id" id="delegation-user" required></select>
+          <select name="agent_id" id="delegation-agent" required></select>
+          <input name="purpose" placeholder="purpose (e.g. review NDA #42)" />
+          <select name="ttl_seconds" title="valid for">
+            <option value="900">15 minutes</option>
+            <option value="3600" selected>1 hour</option>
+            <option value="28800">8 hours</option>
+            <option value="86400">24 hours</option>
+          </select>
+          <button type="submit">Issue grant</button>
+        </form>
+        <div id="delegation-perms" class="checklist"></div>
+        <div id="delegation-banner" class="banner banner--hidden">
+          <strong>Grant token — hand it to the agent runtime (shown once):</strong>
+          <code id="delegation-token-text"></code>
+        </div>
+        <form id="form-delegation-filter" class="form-row">
+          <label class="inline"><input type="checkbox" name="active_only" checked /> active only</label>
+          <button type="submit" class="btn-secondary">Refresh</button>
+          <button type="button" id="delegation-killswitch" class="btn-danger">Revoke all grants of selected agent</button>
+        </form>
+        <table id="table-delegations"><thead><tr>
+          <th>User</th><th>Agent</th><th>Permissions</th><th>Purpose</th><th>Expires</th><th>Status</th><th></th>
+        </tr></thead><tbody></tbody></table>
+      </section>
+
       <!-- Decision probe -->
       <section id="panel-probe" class="panel">
         <h2>Decision probe <small class="muted" data-ctx="both"></small></h2>
@@ -269,6 +304,7 @@
           <select name="agent_id" id="probe-agent"></select>
           <input name="resource" placeholder="resource (e.g. contracts)" />
           <input name="action" placeholder="action (e.g. review)" />
+          <input name="delegation_token" placeholder="delegation token (optional, agent only)" autocomplete="off" />
           <button type="submit" name="mode" value="authorize">Authorize</button>
           <button type="submit" name="mode" value="effective" class="btn-secondary">Effective permissions</button>
         </form>

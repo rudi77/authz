@@ -239,6 +239,9 @@ Management (admin tools, used at provisioning time):
 - `PUT|GET /v1/agents/{id}/roles`
 - `GET /v1/users`, `POST /v1/users` — list / pre-provision users by external identity
 - `GET /v1/audit` — browse decision audit log (newest first)
+- `POST|GET /v1/delegations`, `GET|DELETE /v1/delegations/{id}`,
+  `POST /v1/delegations/revoke`, `POST /v1/delegations/introspect`,
+  `GET /v1/delegations/jwks` — delegation grants (see below)
 - `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{id}/rotate`,
   `DELETE /v1/api-keys/{id}`
 - `POST /v1/tenants/{tid}/invitations`, `GET /v1/tenants/{tid}/invitations`,
@@ -306,6 +309,7 @@ tenant and an application in the top bar; every panel works in that context.
 | Permissions / Roles | define `resource.action` permissions, create roles, tick permissions per role |
 | Users / Memberships | pre-provision users, grant & edit roles per tenant, suspend memberships |
 | Agents | register agents, assign roles (effective = user ∩ agent) |
+| Delegations | issue time-boxed grants (user → agent, permission subset), revoke, kill switch per agent |
 | Invitations | invite by email with roles, revoke pending invites |
 | Feature mask & flags | restrict which permissions a tenant may use, set feature flags |
 | Decision probe | run `authorize` / `effective-permissions` for any user or agent |
@@ -320,6 +324,73 @@ token), or click **API key** and paste an admin key (kept in
 > browser (XSS-sensitive). For non-development use prefer admin OIDC, or
 > place `/admin` behind an authenticated reverse proxy (mTLS, OIDC proxy,
 > IP allowlist). See [`SECURITY.md`](SECURITY.md) for details.
+
+## Delegation grants (agents acting for a user)
+
+An agent's base rule is `user ∩ agent ∩ tenant mask`. A **delegation grant**
+narrows that further for one run: *"Alice lets agent X use only these
+permissions, for this task, until this time."* Grants are opt-in and purely
+additive — callers that don't send one see no change.
+
+```python
+from authz_sdk import AuthzClient
+from authz_sdk.agent_session import start_delegated_agent_session
+
+client = AuthzClient("http://authz:8080", api_key=RUNTIME_KEY)
+
+# 1. Your app (which authenticated Alice) issues a grant for this run.
+grant = client.create_delegation(
+    tenant_id=tenant_id, application_id=app_id,
+    user_id=alice_id, agent_id=agent_id,
+    permissions={"contracts.read"},          # omit → everything user ∩ agent allows
+    ttl_seconds=900, purpose="summarise NDA #42",
+)
+
+# 2. The agent runtime only needs grant.token.
+guard = start_delegated_agent_session(client, grant.token,
+                                      critical_actions=["contracts.read"])
+guard.require("contracts", "read")           # ok
+guard.require("contracts", "review")         # PermissionDeniedError (not delegated)
+
+# 3. Kill switch.
+client.revoke_delegation(grant.id)           # or revoke_delegations(tenant_id=…, agent_id=…)
+```
+
+How it works:
+
+- `POST /v1/delegations` returns an RS256 JWT (RFC 8693 style: `sub` = user,
+  `act.sub` = agent, `jti` = grant id, `authz.permissions`). The subset must lie
+  within the agent's current `user ∩ agent` set (else `403 permissions_not_delegable`).
+- Send it as **`X-Delegation-Token`** on `/v1/authorize`, `/v1/bulk-authorize`
+  or `/v1/effective-permissions`. The decision becomes
+  `user ∩ agent ∩ tenant mask ∩ grant`; user/agent/mask are still resolved
+  live, so removing Alice's role wins over an unexpired grant. With a token,
+  `subject` may be just `{"type": "agent"}` — ids come from the grant.
+- New deny reasons (only with a token): `not_delegated`, `delegation_invalid`,
+  `delegation_expired`, `delegation_revoked`, `delegation_mismatch`.
+- Revocation is checked on every call (`DELETE /v1/delegations/{id}`,
+  `POST /v1/delegations/revoke` for all grants of a user / agent / tenant).
+  Audit rows carry `request.delegation_id`.
+- Third parties (e.g. an MCP server) can verify grants offline via
+  `GET /v1/delegations/jwks`, or online via `POST /v1/delegations/introspect`.
+- A grant is **never** accepted as an API bearer token (distinct `typ` + `aud`).
+
+Configuration:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AUTHZ_DELEGATION_DEFAULT_TTL_SECONDS` | `3600` | TTL when the request omits `ttl_seconds` |
+| `AUTHZ_DELEGATION_MAX_TTL_SECONDS` | `86400` | Upper bound for `ttl_seconds` |
+| `AUTHZ_DELEGATION_REQUIRED` | `false` | `true` denies agent decisions without a grant (`delegation_required`) |
+
+Grants are signed with the service's signing key (shared with the OAuth AS).
+On SQLite one is generated on first use; on Postgres set
+`AUTHZ_OAUTH_SIGNING_KEY_PEM` or run `authz oauth signing-key generate`
+once (otherwise issuance returns `503 signing_key_unavailable`). Run
+`alembic upgrade head` to add the `delegation_grants` table (migration `0004`,
+additive). The admin UI has a **Delegations** panel, and the decision probe
+accepts a grant token. The Go and TypeScript SDKs don't wrap the new
+endpoints yet; they can send the header directly.
 
 ## Python SDK
 

@@ -7,14 +7,18 @@ agent runs (spec section 14).
 
 from __future__ import annotations
 
+import hashlib
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import httpx
 
 from authzkit.exceptions import PermissionDeniedError
+
+DELEGATION_HEADER = "X-Delegation-Token"
 
 
 class AuthzClientError(Exception):
@@ -88,6 +92,43 @@ class ResolvedContext:
     permissions: frozenset[str]
 
 
+@dataclass(frozen=True)
+class Delegation:
+    """A delegation grant. ``token`` is only set on the issuance response."""
+
+    id: str
+    tenant_id: str
+    application_id: str
+    user_id: str
+    agent_id: str
+    permissions: frozenset[str]
+    status: str
+    active: bool
+    expires_at: datetime
+    purpose: str | None = None
+    token: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Delegation:
+        return cls(
+            id=data["id"],
+            tenant_id=data["tenant_id"],
+            application_id=data["application_id"],
+            user_id=data["user_id"],
+            agent_id=data["agent_id"],
+            permissions=frozenset(data.get("permissions") or ()),
+            status=data.get("status", "active"),
+            active=bool(data.get("active", True)),
+            expires_at=datetime.fromisoformat(str(data["expires_at"]).replace("Z", "+00:00")),
+            purpose=data.get("purpose"),
+            token=data.get("token"),
+        )
+
+
+def _delegation_headers(token: str | None) -> dict[str, str] | None:
+    return {DELEGATION_HEADER: token} if token else None
+
+
 @dataclass
 class _CacheEntry:
     permissions: set[str]
@@ -154,12 +195,24 @@ class AuthzClient:
 
     # ---- HTTP helper ---------------------------------------------------------
 
-    def _post(self, path: str, body: dict) -> dict:
+    def _post(self, path: str, body: dict, headers: dict[str, str] | None = None) -> dict:
+        return self._request("POST", path, body, headers)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         attempts = 0
         last_exc: Exception | None = None
         while attempts <= self._max_retries:
             try:
-                response = self._http.post(path, json=body)
+                response = self._http.request(
+                    method, path, json=body, headers=headers, params=params
+                )
             except httpx.HTTPError as e:
                 last_exc = e
                 attempts += 1
@@ -178,6 +231,8 @@ class AuthzClient:
                 except Exception:
                     detail = response.text
                 raise AuthzServiceError(response.status_code, detail)
+            if response.status_code == 204:
+                return None
             return response.json()
         raise AuthzClientError(f"transport error after retries: {last_exc}")
 
@@ -261,6 +316,7 @@ class AuthzClient:
         resource: str,
         action: str,
         context: dict[str, Any] | None = None,
+        delegation_token: str | None = None,
     ) -> AuthorizeResult:
         """Return the full structured ``/v1/authorize`` response.
 
@@ -276,7 +332,7 @@ class AuthzClient:
             "action": action,
             "context": context or {},
         }
-        data = self._post("v1/authorize", body)
+        data = self._post("v1/authorize", body, _delegation_headers(delegation_token))
         return AuthorizeResult(
             allowed=bool(data.get("allowed")),
             decision=str(data.get("decision", "deny")),
@@ -294,6 +350,7 @@ class AuthzClient:
         resource: str,
         action: str,
         context: dict[str, Any] | None = None,
+        delegation_token: str | None = None,
     ) -> bool:
         return self.authorize_decision(
             tenant_id=tenant_id,
@@ -302,6 +359,7 @@ class AuthzClient:
             resource=resource,
             action=action,
             context=context,
+            delegation_token=delegation_token,
         ).allowed
 
     def require(
@@ -313,6 +371,7 @@ class AuthzClient:
         resource: str,
         action: str,
         context: dict[str, Any] | None = None,
+        delegation_token: str | None = None,
     ) -> None:
         result = self.authorize_decision(
             tenant_id=tenant_id,
@@ -321,6 +380,7 @@ class AuthzClient:
             resource=resource,
             action=action,
             context=context,
+            delegation_token=delegation_token,
         )
         if not result.allowed:
             raise PermissionDeniedError(result.required_permission)
@@ -333,6 +393,7 @@ class AuthzClient:
         subject: Subject,
         checks: list[BulkCheck],
         context: dict[str, Any] | None = None,
+        delegation_token: str | None = None,
     ) -> list[BulkCheckResult]:
         body = {
             "tenant_id": tenant_id,
@@ -341,7 +402,7 @@ class AuthzClient:
             "checks": [{"resource": c.resource, "action": c.action} for c in checks],
             "context": context or {},
         }
-        data = self._post("v1/bulk-authorize", body)
+        data = self._post("v1/bulk-authorize", body, _delegation_headers(delegation_token))
         return [
             BulkCheckResult(
                 resource=r["resource"],
@@ -359,13 +420,20 @@ class AuthzClient:
         application_id: str,
         subject: Subject,
         bypass_cache: bool = False,
+        delegation_token: str | None = None,
     ) -> set[str]:
         # service_account_id must be in the key: two service accounts can
         # share the same (type, user_id, agent_id) tuple.
         cache_key = (
             tenant_id,
             application_id,
-            f"{subject.type}:{subject.user_id}:{subject.agent_id}:{subject.service_account_id}",
+            f"{subject.type}:{subject.user_id}:{subject.agent_id}:{subject.service_account_id}"
+            # A grant narrows the set, so it must partition the cache too.
+            + (
+                f":d={hashlib.sha256(delegation_token.encode()).hexdigest()[:24]}"
+                if delegation_token
+                else ""
+            ),
         )
         if self._cache_ttl > 0 and not bypass_cache:
             cached = self._cache_get(cache_key)
@@ -376,8 +444,63 @@ class AuthzClient:
             "application_id": application_id,
             "subject": subject.to_dict(),
         }
-        data = self._post("v1/effective-permissions", body)
+        data = self._post(
+            "v1/effective-permissions", body, _delegation_headers(delegation_token)
+        )
         permissions = set(data.get("permissions") or [])
         if self._cache_ttl > 0:
             self._cache_put(cache_key, permissions)
         return permissions
+
+    # ---- Delegation grants ---------------------------------------------------
+
+    def create_delegation(
+        self,
+        *,
+        tenant_id: str,
+        application_id: str,
+        user_id: str,
+        agent_id: str,
+        permissions: list[str] | set[str] | None = None,
+        ttl_seconds: int | None = None,
+        purpose: str | None = None,
+    ) -> Delegation:
+        """Issue a grant; hand ``result.token`` to the agent runtime.
+
+        ``permissions=None`` delegates everything the agent may currently do
+        for this user. A subset outside ``user ∩ agent`` is rejected (403).
+        """
+        body: dict[str, Any] = {
+            "tenant_id": tenant_id,
+            "application_id": application_id,
+            "user_id": user_id,
+            "agent_id": agent_id,
+        }
+        if permissions is not None:
+            body["permissions"] = sorted(permissions)
+        if ttl_seconds is not None:
+            body["ttl_seconds"] = ttl_seconds
+        if purpose is not None:
+            body["purpose"] = purpose
+        return Delegation.from_dict(self._post("v1/delegations", body))
+
+    def get_delegation(self, delegation_id: str) -> Delegation:
+        return Delegation.from_dict(self._request("GET", f"v1/delegations/{delegation_id}"))
+
+    def revoke_delegation(self, delegation_id: str) -> None:
+        self._request("DELETE", f"v1/delegations/{delegation_id}")
+
+    def revoke_delegations(
+        self, *, tenant_id: str, user_id: str | None = None, agent_id: str | None = None
+    ) -> int:
+        """Kill switch: revoke every active grant of a tenant / user / agent."""
+        body: dict[str, Any] = {"tenant_id": tenant_id}
+        if user_id:
+            body["user_id"] = user_id
+        if agent_id:
+            body["agent_id"] = agent_id
+        return int(self._post("v1/delegations/revoke", body)["revoked"])
+
+    def introspect_delegation(self, token: str) -> dict[str, Any]:
+        """``{"active": bool, ...}`` — inactive results carry a ``reason``."""
+        return dict(self._post("v1/delegations/introspect", {"token": token}))

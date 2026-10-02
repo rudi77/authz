@@ -22,6 +22,7 @@ from authz_sdk.client import (
     AuthzServiceError,
     BulkCheck,
     BulkCheckResult,
+    Delegation,
     ResolvedContext,
     Subject,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "AuthzServiceError",
     "BulkCheck",
     "BulkCheckResult",
+    "Delegation",
     "Invitation",
     "MCPGuard",
     "Membership",

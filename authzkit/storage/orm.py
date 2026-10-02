@@ -493,3 +493,42 @@ class Invitation(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class DelegationGrant(Base):
+    """A user's time-boxed delegation of a permission subset to one agent.
+
+    The signed JWT handed to the agent runtime carries ``jti == id``; this
+    row is the revocation source of truth (a token whose row is revoked or
+    missing is rejected even if its signature and ``exp`` are still valid).
+    ``permissions`` is the explicit subset delegated at issuance; decisions
+    still intersect it with the *live* user ∩ agent set, so later role
+    removals take effect immediately.
+    """
+
+    __tablename__ = "delegation_grants"
+    id: Mapped[str] = mapped_column(UUIDType, primary_key=True, default=_uuid)
+    tenant_id: Mapped[str] = mapped_column(
+        UUIDType, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False
+    )
+    application_id: Mapped[str] = mapped_column(
+        UUIDType, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(
+        UUIDType, ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    agent_id: Mapped[str] = mapped_column(
+        UUIDType, ForeignKey("agents.id", ondelete="CASCADE"), nullable=False
+    )
+    permissions: Mapped[list] = mapped_column(JSONType, nullable=False)
+    purpose: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    issued_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    __table_args__ = (
+        Index("ix_delegation_grants_tenant_agent", "tenant_id", "agent_id"),
+        Index("ix_delegation_grants_tenant_user", "tenant_id", "user_id"),
+    )

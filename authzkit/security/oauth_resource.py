@@ -141,6 +141,9 @@ class JwtResolver:
         unknown issuer, audience mismatch, or expiry. Callers translate
         that into a RFC 6750 ``invalid_token`` 401.
         """
+        # Delegation grants are signed with the same keys as self-issued
+        # access tokens; they must never authenticate an API caller.
+        _reject_delegation_token(token)
         # Peek at the iss claim to route to the right issuer config; the
         # underlying JWTValidator does the same check during verification.
         issuer = _peek_issuer(token)
@@ -209,6 +212,19 @@ class JwtResolver:
             )
         except jwt.PyJWTError as exc:
             raise JWTValidationError(f"invalid self-issued token: {exc}") from exc
+
+
+def _reject_delegation_token(token: str) -> None:
+    import jwt
+
+    from authzkit.security.delegations import DELEGATION_TOKEN_TYPE
+
+    try:
+        header = jwt.get_unverified_header(token)
+    except Exception as exc:  # malformed token bytes
+        raise JWTValidationError(f"malformed token: {exc}") from exc
+    if header.get("typ") == DELEGATION_TOKEN_TYPE:
+        raise JWTValidationError("delegation grants are not access tokens")
 
 
 def _peek_issuer(token: str) -> str | None:

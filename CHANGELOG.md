@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased — Delegation grants for agents
+
+Additive: no existing endpoint, request, response or default behaviour
+changes. Verified against the previous OpenAPI document (only new paths and
+one new optional header).
+
+### New
+
+- `POST /v1/delegations` issues a time-boxed, revocable grant from a user to
+  an agent over a subset of `user ∩ agent ∩ tenant mask`, returned as an
+  RS256 JWT (RFC 8693-style `sub` / `act` / `jti`).
+- Optional `X-Delegation-Token` header on `/v1/authorize`,
+  `/v1/bulk-authorize`, `/v1/effective-permissions` narrows decisions to the
+  grant. New deny reasons: `not_delegated`, `delegation_invalid`,
+  `delegation_expired`, `delegation_revoked`, `delegation_mismatch`
+  (and `delegation_required` with `AUTHZ_DELEGATION_REQUIRED=true`).
+- `GET /v1/delegations`, `GET|DELETE /v1/delegations/{id}`,
+  `POST /v1/delegations/revoke` (kill switch), `POST /v1/delegations/introspect`,
+  `GET /v1/delegations/jwks`.
+- Audit rows record `request.delegation_id`.
+- Python SDK: `create_delegation`, `get_delegation`, `revoke_delegation`,
+  `revoke_delegations`, `introspect_delegation`; `delegation_token=` on
+  `authorize*` / `bulk_authorize` / `get_effective_permissions` (cache-aware);
+  `start_agent_session(..., delegation_token=)` and
+  `start_delegated_agent_session(client, token)`.
+- Admin UI: Delegations panel; decision probe accepts a grant token.
+- Migration `0004_delegation_grants` (new table only).
+
+### Security
+
+- Grants use a distinct JWT `typ` (`authz-delegation+jwt`) and audience
+  (`urn:authz:delegation`) and carry no `scope` / `tenant_id` claims; the
+  bearer-token resolver rejects that `typ` outright, so a grant can never
+  authenticate an API call.
+
 ## Unreleased — Admin UI + standalone Docker image
 
 ### New — full admin UI at `/admin/`

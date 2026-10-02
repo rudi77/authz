@@ -107,7 +107,11 @@ class ApiError extends Error {
 }
 
 async function api(path, options = {}) {
-  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  const headers = {
+    "Content-Type": "application/json",
+    Accept: "application/json",
+    ...(options.headers || {}),
+  };
   const method = (options.method || "GET").toUpperCase();
   const mutating = method !== "GET" && method !== "HEAD";
   if (session && session.kind === "session") {
@@ -222,6 +226,7 @@ const loaders = {
   memberships: loadMemberships,
   agents: loadAgents,
   invitations: loadInvitations,
+  delegations: loadDelegations,
   features: loadFeatures,
   probe: loadProbe,
   audit: () => loadAudit(),
@@ -718,6 +723,114 @@ $("#form-flag").addEventListener("submit", guarded(async (e) => {
   await loadFeatures();
 }));
 
+// ---------------------------------------------------------------- delegations
+
+const agentLabel = (id) => state.agents.find((a) => a.id === id)?.name || `${id.slice(0, 8)}…`;
+
+async function loadDelegationPerms() {
+  const box = $("#delegation-perms");
+  const userId = $("#delegation-user").value;
+  const agentId = $("#delegation-agent").value;
+  if (!userId || !agentId) {
+    box.replaceChildren(el("p", { class: "hint" }, "Pick a user and an agent."));
+    return;
+  }
+  const result = await api("/v1/effective-permissions", {
+    method: "POST",
+    body: {
+      tenant_id: state.tenantId,
+      application_id: state.appId,
+      subject: { type: "agent", user_id: userId, agent_id: agentId },
+    },
+  });
+  box.replaceChildren(
+    el("p", { class: "hint" }, "Delegable now (user ∩ agent ∩ tenant mask) — untick to narrow:"),
+    ...(result.permissions.length
+      ? result.permissions.map((p) => el("label", {},
+          el("input", { type: "checkbox", value: p, checked: true }), code(p)))
+      : [el("p", { class: "hint" }, "Nothing to delegate: this agent and user share no permissions.")]),
+  );
+}
+
+async function loadDelegations() {
+  if (!state.tenantId || !state.appId) {
+    $("#delegation-perms").replaceChildren();
+    return fillTable("#table-delegations", [], "Select a tenant and an application.");
+  }
+  await Promise.all([fetchUsers(), fetchAgents()]);
+  fillUserSelect($("#delegation-user"));
+  const agentSelect = $("#delegation-agent");
+  const current = agentSelect.value;
+  agentSelect.replaceChildren(
+    ...(state.agents.length
+      ? state.agents.map((a) => el("option", { value: a.id, selected: a.id === current }, a.name))
+      : [el("option", { value: "" }, "no agents yet — register one under Agents")]),
+  );
+  await loadDelegationPerms();
+  const params = new URLSearchParams({ tenant_id: state.tenantId, page_size: "200" });
+  if (new FormData($("#form-delegation-filter")).get("active_only")) params.set("active_only", "true");
+  const rows = (await api(`/v1/delegations?${params}`)).filter((g) => g.application_id === state.appId);
+  fillTable("#table-delegations", rows.map((g) => [
+    userLabel(g.user_id),
+    agentLabel(g.agent_id),
+    el("div", {}, g.permissions.map((p) => el("div", { class: "small" }, code(p)))),
+    g.purpose || "—",
+    fmtDate(g.expires_at),
+    pill(g.active ? "active" : g.status === "revoked" ? "revoked" : "expired", g.active),
+    g.active
+      ? el("button", {
+          type: "button", class: "btn-danger btn-small",
+          onclick: guarded(async () => {
+            if (!confirm("Revoke this grant? The agent loses it on its next check.")) return;
+            await api(`/v1/delegations/${g.id}`, { method: "DELETE" });
+            toast("Grant revoked");
+            await loadDelegations();
+          }),
+        }, "Revoke")
+      : "",
+  ]), "No delegation grants.");
+}
+
+$("#delegation-user").addEventListener("change", guarded(loadDelegationPerms));
+$("#delegation-agent").addEventListener("change", guarded(loadDelegationPerms));
+$("#form-delegation-filter").addEventListener("submit", guarded(loadDelegations));
+
+$("#form-delegation").addEventListener("submit", guarded(async (e) => {
+  requireCtx("both");
+  const fd = new FormData(e.target);
+  if (!fd.get("user_id") || !fd.get("agent_id")) throw new Error("Pick a user and an agent.");
+  const permissions = [...document.querySelectorAll("#delegation-perms input:checked")].map((i) => i.value);
+  if (!permissions.length) throw new Error("Tick at least one permission to delegate.");
+  const created = await api("/v1/delegations", {
+    method: "POST",
+    body: {
+      tenant_id: state.tenantId,
+      application_id: state.appId,
+      user_id: fd.get("user_id"),
+      agent_id: fd.get("agent_id"),
+      permissions,
+      ttl_seconds: Number(fd.get("ttl_seconds")),
+      purpose: fd.get("purpose") || null,
+    },
+  });
+  showSecret("delegation-banner", "delegation-token-text", created.token);
+  e.target.querySelector("[name=purpose]").value = "";
+  toast(`Grant issued: ${created.permissions.length} permission(s)`);
+  await loadDelegations();
+}));
+
+$("#delegation-killswitch").addEventListener("click", guarded(async () => {
+  requireCtx("tenant");
+  const agentId = $("#delegation-agent").value;
+  if (!agentId) throw new Error("Pick an agent first.");
+  if (!confirm(`Revoke ALL active grants of agent "${agentLabel(agentId)}"?`)) return;
+  const result = await api("/v1/delegations/revoke", {
+    method: "POST", body: { tenant_id: state.tenantId, agent_id: agentId },
+  });
+  toast(`${result.revoked} grant(s) revoked`);
+  await loadDelegations();
+}));
+
 // ---------------------------------------------------------------- decision probe
 
 async function loadProbe() {
@@ -739,17 +852,20 @@ $("#form-decision").addEventListener("submit", guarded(async (e) => {
   if (fd.get("user_id")) subject.user_id = fd.get("user_id");
   if (fd.get("agent_id")) subject.agent_id = fd.get("agent_id");
   const base = { tenant_id: state.tenantId, application_id: state.appId, subject };
+  const token = (fd.get("delegation_token") || "").trim();
+  const headers = token ? { "X-Delegation-Token": token } : {};
   const verdict = $("#decision-verdict");
   const out = $("#decision-output");
   try {
     if (mode === "effective") {
-      const result = await api("/v1/effective-permissions", { method: "POST", body: base });
+      const result = await api("/v1/effective-permissions", { method: "POST", body: base, headers });
       verdict.replaceChildren(el("p", {}, `${result.permissions.length} effective permission(s)`));
       out.textContent = JSON.stringify(result, null, 2);
     } else {
       if (!fd.get("resource") || !fd.get("action")) throw new Error("Resource and action are required.");
       const result = await api("/v1/authorize", {
-        method: "POST", body: { ...base, resource: fd.get("resource"), action: fd.get("action") },
+        method: "POST", headers,
+        body: { ...base, resource: fd.get("resource"), action: fd.get("action") },
       });
       verdict.replaceChildren(el("p", { class: "verdict" },
         pill(result.allowed ? "ALLOW" : "DENY", result.allowed), " ", code(result.required_permission),

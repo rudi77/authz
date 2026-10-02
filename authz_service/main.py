@@ -24,6 +24,7 @@ from authz_service.api.api_keys import router as api_keys_router
 from authz_service.api.applications import router as applications_router
 from authz_service.api.authorize import router as authorize_router
 from authz_service.api.context import router as context_router
+from authz_service.api.delegations import router as delegations_router
 from authz_service.api.invitations import router as invitations_router
 from authz_service.api.oauth import admin_router as oauth_admin_router
 from authz_service.api.oauth import as_router as oauth_as_router
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
     app.include_router(api_keys_router)
     app.include_router(invitations_router)
     app.include_router(admin_router)
+    app.include_router(delegations_router)
 
     # OAuth: each half toggles independently.
     if settings.oauth_as_enabled:
