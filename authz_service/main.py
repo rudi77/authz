@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from authz_service.config import Settings
 
+from authz_service.api.admin import router as admin_router
 from authz_service.api.agents import router as agents_router
 from authz_service.api.api_keys import router as api_keys_router
 from authz_service.api.applications import router as applications_router
@@ -191,6 +192,7 @@ def create_app() -> FastAPI:
     app.include_router(agents_router)
     app.include_router(api_keys_router)
     app.include_router(invitations_router)
+    app.include_router(admin_router)
 
     # OAuth: each half toggles independently.
     if settings.oauth_as_enabled:

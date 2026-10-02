@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased — Admin UI + standalone Docker image
+
+### New — full admin UI at `/admin/`
+
+- Rebuilt the admin SPA to drive the whole service: tenants,
+  applications, permissions, roles (permission checklist), users,
+  memberships, agents, invitations, tenant permission mask + feature
+  flags, decision probe (authorize / effective permissions), audit log,
+  API keys and OAuth clients / signing keys.
+- Global tenant / application selector; server data is rendered via
+  `textContent` only (the old UI interpolated names into `innerHTML`).
+- SSO button only shown when admin OIDC is configured.
+
+### New — admin API endpoints backing the UI
+
+- `GET /v1/tenants`, `PATCH /v1/tenants/{id}`, `GET /v1/tenants/{id}/mappings`,
+  `GET /v1/tenants/{id}/feature-flags`,
+  `GET|PUT /v1/tenants/{tid}/applications/{aid}/permission-mask`
+- `GET /v1/applications`, `PATCH /v1/applications/{id}`
+- `GET|POST /v1/users`, `GET /v1/agents/{id}/roles`, `GET /v1/audit`
+
+### Docker
+
+- Image works standalone: default SQLite database at `/data/authz.db`
+  (declared `VOLUME`, owned by the non-root user).
+- `AUTHZ_RUN_MIGRATIONS=true` runs `alembic upgrade head` on start;
+  `AUTHZ_PORT` sets the listen port. `docker-compose.yml` uses it.
+- Added `.dockerignore`; CI smoke test now also checks `/admin/` and
+  release tags `v*` publish `ghcr.io/<repo>:<tag>`.
+
 ## Unreleased — OAuth 2.0 in three roles
 
 Adds full OAuth 2.0 compatibility to the service, additive to the

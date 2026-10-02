@@ -152,11 +152,35 @@ authz inspect decision --tenant-id … --application-id … \
 
 ### Docker
 
+**Single container** (SQLite under the `/data` volume, nothing else needed):
+
+```bash
+docker build -t authz .            # or: docker pull ghcr.io/rudi77/authz:latest
+docker run -d --name authz -p 8080:8080 \
+  -e AUTHZ_API_KEYS=change-me \
+  -v authz-data:/data \
+  authz
+# admin UI: http://localhost:8080/admin/  → "API key" → paste change-me
+```
+
+**Full stack** (Postgres + Redis + service, migrations applied on start):
+
 ```bash
 docker compose up --build
-# service on http://localhost:8080
-# api key: dev-key
+# admin UI: http://localhost:8080/admin/   api key: dev-key
 ```
+
+Container knobs:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AUTHZ_DATABASE_URL` | `sqlite+pysqlite:////data/authz.db` | Point at Postgres for production |
+| `AUTHZ_RUN_MIGRATIONS` | `false` | `true` runs `alembic upgrade head` before start (needed for Postgres) |
+| `AUTHZ_PORT` | `8080` | Listen port inside the container |
+| `AUTHZ_API_KEYS` | — | Bootstrap admin key(s); without it every request is rejected (fail-closed) |
+
+Images are published to `ghcr.io/rudi77/authz` — `latest` from `main`,
+`vX.Y.Z` from release tags. The container runs as non-root uid 1000.
 
 ### From source
 
@@ -202,16 +226,19 @@ Runtime (PEPs hit these from every request):
 
 Management (admin tools, used at provisioning time):
 
-- `POST /v1/tenants`, `GET /v1/tenants/{id}`
-- `POST /v1/tenants/{id}/mappings` — map external IdP tenant → internal
-- `PUT /v1/tenants/{id}/feature-flags`
-- `POST /v1/applications`, `GET /v1/applications/{id}`
-- `POST /v1/applications/{id}/roles`
-- `POST /v1/applications/{id}/permissions`
-- `PUT /v1/roles/{id}/permissions`
-- `POST /v1/tenants/{tid}/memberships`, `PATCH /v1/memberships/{id}`
-- `POST /v1/tenants/{tid}/applications/{aid}/agents`
-- `PUT /v1/agents/{id}/roles`
+- `POST /v1/tenants`, `GET /v1/tenants`, `GET|PATCH /v1/tenants/{id}`
+- `POST|GET /v1/tenants/{id}/mappings` — map external IdP tenant → internal
+- `PUT|GET /v1/tenants/{id}/feature-flags`
+- `GET|PUT /v1/tenants/{tid}/applications/{aid}/permission-mask` — tenant feature mask
+- `POST /v1/applications`, `GET /v1/applications`, `GET|PATCH /v1/applications/{id}`
+- `POST|GET /v1/applications/{id}/roles`
+- `POST|GET /v1/applications/{id}/permissions`
+- `PUT|GET /v1/roles/{id}/permissions`
+- `POST|GET /v1/tenants/{tid}/memberships`, `PATCH /v1/memberships/{id}`
+- `POST|GET /v1/tenants/{tid}/applications/{aid}/agents`
+- `PUT|GET /v1/agents/{id}/roles`
+- `GET /v1/users`, `POST /v1/users` — list / pre-provision users by external identity
+- `GET /v1/audit` — browse decision audit log (newest first)
 - `POST /v1/api-keys`, `GET /v1/api-keys`, `POST /v1/api-keys/{id}/rotate`,
   `DELETE /v1/api-keys/{id}`
 - `POST /v1/tenants/{tid}/invitations`, `GET /v1/tenants/{tid}/invitations`,
@@ -269,16 +296,30 @@ curl -X POST http://localhost:8080/v1/invitations/$TOKEN/accept \
 
 ## Admin UI
 
-A minimal SPA is served at `/admin`. No build step — vanilla HTML + JS
-talking to the same REST API. Useful for: provisioning tenants/apps,
-issuing/rotating API keys, sending invitations, probing decisions.
+An admin SPA is served at `/admin/`. No build step — vanilla HTML + JS
+talking to the same REST API, so it ships inside the Docker image. Pick a
+tenant and an application in the top bar; every panel works in that context.
 
-> **Security note.** The admin UI is a thin developer tool, not a
-> hardened admin console. The API key is stored in `localStorage`
-> (XSS-sensitive) and there is no built-in user authentication or CSRF
-> protection. For non-development use, place it behind an authenticated
-> reverse proxy (mTLS, OIDC proxy, IP allowlist) or disable it
-> entirely. See [`SECURITY.md`](SECURITY.md) for details.
+| Area | What you can do |
+|---|---|
+| Tenants / Applications | create, list, suspend / activate, IdP tenant mappings |
+| Permissions / Roles | define `resource.action` permissions, create roles, tick permissions per role |
+| Users / Memberships | pre-provision users, grant & edit roles per tenant, suspend memberships |
+| Agents | register agents, assign roles (effective = user ∩ agent) |
+| Invitations | invite by email with roles, revoke pending invites |
+| Feature mask & flags | restrict which permissions a tenant may use, set feature flags |
+| Decision probe | run `authorize` / `effective-permissions` for any user or agent |
+| Audit log | browse allow / deny decisions with reasons |
+| API keys / OAuth clients | issue, rotate, revoke; rotate token signing key |
+
+Sign in with **SSO** when admin OIDC is configured (session cookie + CSRF
+token), or click **API key** and paste an admin key (kept in
+`sessionStorage` per tab unless you opt into `localStorage`).
+
+> **Security note.** API-key mode puts an admin credential in the
+> browser (XSS-sensitive). For non-development use prefer admin OIDC, or
+> place `/admin` behind an authenticated reverse proxy (mTLS, OIDC proxy,
+> IP allowlist). See [`SECURITY.md`](SECURITY.md) for details.
 
 ## Python SDK
 
