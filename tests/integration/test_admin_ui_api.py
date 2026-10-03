@@ -74,7 +74,9 @@ def test_admin_ui_is_served(client: TestClient):
     assert "AuthZ Admin" in r.text
     # Browsers must revalidate, or an upgrade keeps showing the old UI.
     assert r.headers["cache-control"] == "no-cache"
-    js = client.get("/admin/app.js")
+    # Versioned asset URLs so stale pre-no-cache copies are never reused.
+    assert 'src="./app.js?v=' in r.text and 'href="./styles.css?v=' in r.text
+    js = client.get("/admin/app.js?v=2")
     assert js.status_code == 200 and js.headers["cache-control"] == "no-cache"
     # Conditional requests still get a cheap 304.
     again = client.get("/admin/app.js", headers={"If-None-Match": js.headers["etag"]})
