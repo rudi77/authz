@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Architecture: from a question to a decision — authz</title>
+  <meta name="description" content="Follow an authorization request through caller authentication, the decision engine, delegation grants and the audit log, then find the code for each part.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="architecture.html" aria-current="page">Architecture</a></li>
+        <li><a href="principles.html">Principles</a></li>
+        <li><a href="get-started.html">Get started</a></li>
+        <li><a href="blog/index.html">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Architecture</div>
+  <h1>From a question to a decision</h1>
+  <p class="section-intro">This guide follows one authorization request through the service: who sent it, which permissions apply, what the answer is and where it is recorded. The later sections cover identities, storage and the parts that matter when several service processes run. Each section links to the source file that implements it.</p>
+  <nav class="toc" aria-label="Page contents"><strong>On this page</strong><ol>
+    <li><a href="#request">Following one request</a></li>
+    <li><a href="#callers">Identifying the caller</a></li>
+    <li><a href="#engine">Computing the permission set</a></li>
+    <li><a href="#grants">Applying a delegation grant</a></li>
+    <li><a href="#bulk">Answering many checks at once</a></li>
+    <li><a href="#recording">Recording the decision</a></li>
+    <li><a href="#identity">Resolving a login into ids</a></li>
+    <li><a href="#storage">Storing configuration</a></li>
+    <li><a href="#shared-state">Sharing state between processes</a></li>
+    <li><a href="#console">Serving the admin console</a></li>
+    <li><a href="#map">Finding the code</a></li>
+  </ol></nav>
+  <div class="prose">
+    <h2 id="request">1. Following one request</h2>
+    <p>An agent working for Alice wants to read a contract. Its runtime sends <code>POST /v1/authorize</code> with the tenant, application, a subject <code>{"type": "agent", "user_id": …, "agent_id": …}</code> and the permission <code>contracts.read</code>, split into resource and action. The request passes these stages:</p>
+    <figure>
+<pre class="diagram"><code>agent runtime
+   |  POST /v1/authorize  (X-API-Key, optional X-Delegation-Token)
+   v
+middleware      request id, rate limit, idempotent replay
+   |
+   v
+caller check    which key or token?  scope runtime or admin?  tenant allowed?
+   |
+   v
+grant check     only if X-Delegation-Token is present
+   |
+   v
+engine          tenant and app active? user and agent permissions? mask?
+   |
+   v
+audit + metrics deny always recorded, allow when AUTHZ_AUDIT_ALL=true
+   |
+   v
+{"allowed": true, "reason": "permission_granted", ...}</code></pre>
+      <figcaption>Figure 1. Stages of one decision request. A refusal at the caller check ends the request with HTTP 401 or 403; a refusal by the grant check or the engine is an ordinary answer with <code>"allowed": false</code>.</figcaption>
+    </figure>
+    <p>The distinction in the caption matters for integrators. An HTTP error means the caller could not ask the question, for example because its key is wrong. <code>"allowed": false</code> means the question was asked and answered. Your code should treat both as "do not proceed", but only the second is a statement about the subject's rights.</p>
+
+    <h2 id="callers">2. Identifying the caller</h2>
+    <p>The caller is the program sending the request, which differs from the subject the question is about. <a href="https://github.com/rudi77/authz/blob/main/authz_service/dependencies.py"><code>require_caller</code></a> turns the request's credential into a <em>principal</em> in this order:</p>
+    <ol>
+      <li>An <code>X-API-Key</code> header, or a bearer value that does not look like a JWT, is compared with the bootstrap keys from <code>AUTHZ_API_KEYS</code> and then with the hashed keys stored in the database.</li>
+      <li>A bearer JWT is checked against the configured token issuers, or against the service's own signing keys if it issued the token.</li>
+      <li>Without either, a session cookie from admin sign-in is accepted; changing requests must then carry the session's CSRF token.</li>
+    </ol>
+    <p>Each principal has scopes. The decision endpoints accept <code>runtime</code> and <code>admin</code>, and a principal bound to a tenant may only ask about that tenant. Key comparisons use constant-time functions so that response timing does not reveal how much of a key was correct.</p>
+
+    <h2 id="engine">3. Computing the permission set</h2>
+    <p><a href="https://github.com/rudi77/authz/blob/main/authzkit/rbac/checker.py"><code>AuthorizationEngine.authorize</code></a> contains the entire decision logic. It works through these steps and stops at the first refusal:</p>
+    <ol>
+      <li>Check that the tenant and the application are active, otherwise <code>tenant_not_active</code> or <code>application_not_active</code>.</li>
+      <li>For a user: find an active membership, preferring one for this application over a tenant-wide one, and collect the permissions of its roles. Without a membership the answer is <code>no_active_membership</code>.</li>
+      <li>For an agent: require an active membership of its user and an active agent, then keep only permissions held by both.</li>
+      <li>Intersect the result with the tenant's permission mask, if one is configured.</li>
+      <li>Look for the requested permission. If it is missing because of the mask, answer <code>tenant_feature_disabled</code>, otherwise <code>missing_permission</code>.</li>
+      <li>Evaluate policy conditions, if the engine was created with rules. A failed condition gives <code>policy_condition_failed</code>.</li>
+    </ol>
+<pre><code>effective = (user_permissions ∩ agent_permissions) ∩ tenant_mask
+allowed   = required_permission in effective and conditions hold</code></pre>
+    <p>The engine reads through a repository interface. The service uses a SQLAlchemy implementation, while tests and embedded use can pass the in-memory store. Because the engine has no HTTP dependency, the same rules apply whether a Python program embeds it or calls the service.</p>
+
+    <h2 id="grants">4. Applying a delegation grant</h2>
+    <p>If the request carries <code>X-Delegation-Token</code>, <a href="https://github.com/rudi77/authz/blob/main/authz_service/api/delegations.py"><code>apply_delegation</code></a> runs before the engine. <a href="https://github.com/rudi77/authz/blob/main/authzkit/security/delegations.py"><code>DelegationService.verify</code></a> checks the token's type header, signature, audience, issuer and expiry, then loads the grant's database row by its id. A revoked or expired row rejects the token even if its signature is still valid, and the signed claims must match the stored row.</p>
+    <p>The grant must also fit the request: the subject has to be an agent, and tenant, application, user and agent have to match the grant. If the request's subject omits the user or agent id, they are taken from the grant. The engine then receives the grant's permission list and intersects it with the result of step 4 above. A permission the agent could otherwise use but the grant excludes is refused with <code>not_delegated</code>.</p>
+    <p>Grants are signed with the same keys as the OAuth access tokens the service can issue. To keep the two apart, grants use their own type header and audience, carry no scope claim, and the bearer-token check refuses the grant type outright.</p>
+
+    <h2 id="bulk">5. Answering many checks at once</h2>
+    <p>An agent runtime deciding which tools to offer may ask about 30 permissions for the same subject. <code>bulk_authorize</code> performs steps 1 to 4 of the engine once and then answers every check against the same set. Only policy conditions run per check, because they can depend on per-resource data in the request's context. <code>effective_permissions</code> returns the set from step 4 directly, without conditions.</p>
+    <p>The client libraries can cache effective permissions for a configured time. Caching moves a revocation's effect to the end of that time. The Python <code>AgentGuard</code> therefore re-asks the service for actions listed as critical.</p>
+
+    <h2 id="recording">6. Recording the decision</h2>
+    <p>After the engine answers, the route writes an <a href="https://github.com/rudi77/authz/blob/main/authzkit/audit/logger.py">audit entry</a> with the request, the response, subject ids and the request id. The audit sink stores every refusal and stores allowed decisions only when <code>AUTHZ_AUDIT_ALL=true</code>, because a busy agent can produce thousands of allowed checks per minute. A grant id is added to the stored request when one was used.</p>
+    <p>The same request also updates Prometheus counters by decision and reason, and a latency histogram. A background worker deletes audit rows older than <code>AUTHZ_AUDIT_RETENTION_DAYS</code> when that setting is positive.</p>
+
+    <h2 id="identity">7. Resolving a login into ids</h2>
+    <p>The decision endpoints expect internal ids. Applications obtain them with <code>POST /v1/resolve-context</code>, implemented by <a href="https://github.com/rudi77/authz/blob/main/authzkit/tenancy/resolver.py"><code>TenantContextResolver</code></a>:</p>
+    <ol>
+      <li>Find the user by provider, issuer and subject, or create one if user provisioning is enabled.</li>
+      <li>Determine the tenant from <code>explicit_tenant_id</code> or from a tenant mapping for the token's external tenant id.</li>
+      <li>Find the user's active membership for the application, falling back to a tenant-wide one.</li>
+      <li>Return the ids, the role names and the resulting permissions.</li>
+    </ol>
+    <p>The <a href="https://github.com/rudi77/authz/tree/main/authzkit/identity">identity normalizers</a> convert provider-specific claims into one <code>IdentityPrincipal</code> shape. They are where Entra's <code>oid</code> and <code>tid</code> or Cognito's attributes are interpreted; the rest of the code only sees the normalized form.</p>
+
+    <h2 id="storage">8. Storing configuration</h2>
+    <p>Tenants, applications, users, memberships, roles, permissions, agents, grants, keys and audit entries live in one relational database. <a href="https://github.com/rudi77/authz/blob/main/authzkit/storage/orm.py"><code>orm.py</code></a> defines the tables and <a href="https://github.com/rudi77/authz/blob/main/authzkit/storage/sqlalchemy.py"><code>SqlAlchemyStore</code></a> implements the repository on top. PostgreSQL is the production target; SQLite serves tests and the single-container setup.</p>
+    <p>Schema changes ship as <a href="https://github.com/rudi77/authz/tree/main/migrations/versions">Alembic migrations</a>. With SQLite, the service creates missing tables at startup. With PostgreSQL it leaves the schema alone, so that an accidental deployment cannot change a production database; run <code>alembic upgrade head</code> or set <code>AUTHZ_RUN_MIGRATIONS=true</code> in the container.</p>
+
+    <h2 id="shared-state">9. Sharing state between processes</h2>
+    <p>Decisions read only from the database, so any number of service processes can answer them. Two features keep short-lived state: rate limiting counts requests per caller, and idempotent replay stores the first response for an <code>Idempotency-Key</code>. Each has an in-memory and a Redis implementation behind one interface; <code>AUTHZ_REDIS_URL</code> selects Redis at startup in <a href="https://github.com/rudi77/authz/blob/main/authz_service/middleware.py"><code>middleware.py</code></a>. Without Redis, every process counts and replays on its own.</p>
+
+    <h2 id="console">10. Serving the admin console</h2>
+    <p>The console is a set of static files in <a href="https://github.com/rudi77/authz/tree/main/authz_service/ui"><code>authz_service/ui</code></a>, served under <code>/admin/</code>. It has no build step and no server-side rendering: the JavaScript calls the same REST endpoints as any other client, with the API key from the sign-in screen or with the session cookie from admin sign-in. The files are sent with <code>Cache-Control: no-cache</code>, so browsers check for a new version on every load.</p>
+
+    <h2 id="map">11. Finding the code</h2>
+    <div class="table-wrap"><table><thead><tr><th>Directory</th><th>Responsibility</th></tr></thead><tbody>
+      <tr><td><code>authzkit/rbac</code></td><td>Roles, permissions and the decision engine</td></tr>
+      <tr><td><code>authzkit/tenancy</code>, <code>authzkit/identity</code></td><td>Tenants, memberships and the conversion of logins into users</td></tr>
+      <tr><td><code>authzkit/agents</code>, <code>authzkit/tools</code>, <code>authzkit/mcp</code></td><td>Agent context and the local guards</td></tr>
+      <tr><td><code>authzkit/policies</code></td><td>Optional conditions evaluated after the role check</td></tr>
+      <tr><td><code>authzkit/security</code></td><td>API keys, invitations, sessions, OAuth clients, signing keys and delegation grants</td></tr>
+      <tr><td><code>authzkit/storage</code></td><td>Database tables and the SQL and in-memory repositories</td></tr>
+      <tr><td><code>authz_service</code></td><td>FastAPI application, routes in <code>api/</code>, dependencies, middleware, CLI and console</td></tr>
+      <tr><td><code>authz_sdk</code>, <code>sdks/go</code>, <code>sdks/typescript</code></td><td>Client libraries</td></tr>
+      <tr><td><code>migrations</code></td><td>Alembic schema migrations</td></tr>
+    </tbody></table></div>
+    <p>The repository's <a href="https://github.com/rudi77/authz/blob/main/CLAUDE.md">CLAUDE.md</a> describes the conventions for contributors, and <a href="https://github.com/rudi77/authz/blob/main/OPEN_ITEMS.md">OPEN_ITEMS.md</a> lists what is deliberately not yet implemented.</p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="features.html">Features</a> · <a href="architecture.html">Architecture</a> · <a href="principles.html">Principles</a> · <a href="get-started.html">Get started</a> · <a href="blog/index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

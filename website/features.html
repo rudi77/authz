@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Features — authz</title>
+  <meta name="description" content="Choose authz capabilities by task: permissions and roles, tenants, login resolution, decision calls, agents, delegation grants, tool guards, conditions, credentials and audit.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="features.html" aria-current="page">Features</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="principles.html">Principles</a></li>
+        <li><a href="get-started.html">Get started</a></li>
+        <li><a href="blog/index.html">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Features</div>
+  <h1>What you can do with authz</h1>
+  <p class="section-intro">Every capability below serves one of three questions: who is asking, what they may do, and whether you can later explain the answer. The sections are ordered roughly as an application adopts them. The <a href="get-started.html">getting-started guide</a> contains the commands for a first run.</p>
+  <nav class="toc" aria-label="Page contents"><strong>On this page</strong><ol>
+    <li><a href="#model">Describe permissions and roles</a></li>
+    <li><a href="#tenants">Serve several customers</a></li>
+    <li><a href="#identities">Recognise users from their login</a></li>
+    <li><a href="#checks">Check a permission in your application</a></li>
+    <li><a href="#agents">Let agents act for users</a></li>
+    <li><a href="#delegations">Narrow a single agent run</a></li>
+    <li><a href="#tools">Guard tools and MCP servers</a></li>
+    <li><a href="#conditions">Add conditions on resource data</a></li>
+    <li><a href="#credentials">Authenticate callers</a></li>
+    <li><a href="#console">Manage everything in the admin console</a></li>
+    <li><a href="#audit">Explain and monitor decisions</a></li>
+    <li><a href="#operations">Run several service processes</a></li>
+    <li><a href="#sdks">Choose a client library</a></li>
+  </ol></nav>
+  <div class="prose">
+    <h2 id="model">Describe permissions and roles</h2>
+    <p>A permission is the name of something your application checks before acting, for example <code>contracts.approve</code>. The convention is <code>resource.action</code>, with an optional namespace in front: <code>mcp.github.create_issue</code>. authz compares these names exactly and does not interpret the dots, so <code>contracts.*</code> is an ordinary name and not a wildcard.</p>
+    <p>Permissions belong to an application. A role groups some of them under a name such as <code>lawyer</code>. Users receive roles through memberships, and agents receive roles directly. A role's <em>scope</em> documents whom it is intended for: <code>application</code> roles for people, <code>agent</code> roles for agents, and <code>tenant</code> roles that exist only within one customer. Saving a role's permissions replaces the complete list, so the stored state always matches what you last sent.</p>
+<pre><code>PUT /v1/roles/{role_id}/permissions
+{"permissions": ["contracts.read", "contracts.review"]}</code></pre>
+    <p>The <code>authz bootstrap --spec FILE</code> command creates a tenant, an application, its permissions, roles and agents from a YAML file and can be run repeatedly. It suits test environments that are rebuilt often.</p>
+
+    <h2 id="tenants">Serve several customers</h2>
+    <p>A tenant usually corresponds to one customer organisation. Memberships, agents and audit records belong to a tenant, and every decision names the tenant it concerns. A user can be a member of several tenants with different roles in each.</p>
+    <p>Suspending a tenant or an application makes every decision within it return <code>tenant_not_active</code> or <code>application_not_active</code>. This is useful when a contract ends but its data must be kept.</p>
+    <p>A <strong>permission mask</strong> limits what a tenant may use at all, independently of anyone's roles. If ACME has not bought contract approval, leave <code>contracts.approve</code> out of ACME's mask. Requests for it are then denied with <code>tenant_feature_disabled</code> instead of <code>missing_permission</code>, which tells support staff that the cause is the customer's plan and not a missing role. An empty mask means no restriction.</p>
+<pre><code>PUT /v1/tenants/{tenant_id}/applications/{application_id}/permission-mask
+{"permissions": ["contracts.read", "contracts.review"]}</code></pre>
+    <p><strong>Feature flags</strong> store arbitrary JSON values per tenant, optionally per application, such as <code>{"max_documents": 500}</code>. authz does not evaluate them in decisions; your application reads them through the management API, which requires an admin-scoped credential.</p>
+
+    <h2 id="identities">Recognise users from their login</h2>
+    <p>Your identity provider signs users in and issues a token. Its claims describe the user, but in a provider-specific shape: Microsoft Entra uses <code>oid</code> and <code>tid</code>, Cognito uses <code>sub</code> and custom attributes. <code>POST /v1/resolve-context</code> takes the provider, issuer and subject from that token and returns the internal user id, tenant id, roles and permissions.</p>
+    <div class="table-wrap"><table><thead><tr><th>Provider value</th><th>Intended for</th></tr></thead><tbody>
+      <tr><td><code>azure_entra</code></td><td>Microsoft Entra ID</td></tr>
+      <tr><td><code>aws_cognito</code></td><td>Amazon Cognito user pools</td></tr>
+      <tr><td><code>gcp_identity</code></td><td>Google Cloud Identity</td></tr>
+      <tr><td><code>generic_oidc</code></td><td>Any other OpenID Connect provider, such as Keycloak</td></tr>
+    </tbody></table></div>
+    <p>An unknown user is created on first sight (<code>AUTHZ_AUTO_PROVISION_USER</code>, enabled by default), but receives no roles until someone grants a membership. The tenant comes from <code>explicit_tenant_id</code>, or from a <strong>tenant mapping</strong> that links the provider's tenant identifier, such as an Entra <code>tid</code>, to a tenant. Tenants are not created automatically unless <code>AUTHZ_AUTO_PROVISION_TENANT=true</code>, because adding a customer is a business decision.</p>
+    <p><strong>Invitations</strong> cover users who have never signed in. An administrator invites an email address with roles and receives a one-time token. Your application delivers it, and when the user signs in and redeems it through <code>POST /v1/invitations/{token}/accept</code>, authz creates the membership. Users can also be added in advance in the admin console.</p>
+
+    <h2 id="checks">Check a permission in your application</h2>
+    <p>Three calls answer the question in different shapes. All three require a credential with the <code>runtime</code> or <code>admin</code> scope.</p>
+    <div class="table-wrap"><table><thead><tr><th>Call</th><th>Use it when</th><th>Response</th></tr></thead><tbody>
+      <tr><td><code>/v1/authorize</code></td><td>A user or agent is about to perform one action.</td><td><code>allowed</code>, a <code>reason</code> and the required permission.</td></tr>
+      <tr><td><code>/v1/bulk-authorize</code></td><td>You need many answers for the same subject, such as which of 30 tools to offer.</td><td>One result per check, computed from a single permission lookup.</td></tr>
+      <tr><td><code>/v1/effective-permissions</code></td><td>You want to show or hide interface elements, or check locally afterwards.</td><td>The complete permission list at this moment.</td></tr>
+    </tbody></table></div>
+    <p>A refusal always carries a reason. The most common are <code>missing_permission</code>, <code>no_active_membership</code>, <code>tenant_feature_disabled</code> and, for agents, <code>agent_not_active</code>. Log the reason: it distinguishes a configuration gap from an intentional refusal.</p>
+    <p>The Python, Go and TypeScript clients can cache effective permissions for a configurable time. A cached list does not see role changes until it expires, so use a short time or call <code>authorize</code> for actions where a revocation must apply immediately. Mutating requests accept an <code>Idempotency-Key</code> header, and an <code>X-Request-Id</code> header is copied into the audit record.</p>
+
+    <h2 id="agents">Let agents act for users</h2>
+    <p>An agent is registered within a tenant and application and receives roles like a user. It never acts on its own, though: every agent decision names the user it is working for. The permissions that apply are those the user <em>and</em> the agent hold, further limited by the tenant's mask.</p>
+<pre><code>user (lawyer):   read, review, approve
+agent (analyzer): read, review, classify
+effective:        read, review</code></pre>
+    <p>This intersection limits what a manipulated prompt can achieve. If text in a contract persuades the agent to approve it, the request fails with <code>missing_permission</code>, because the agent's role lacks approval. If the agent's role contained approval but the user's did not, the result would be the same. A suspended membership or a suspended agent ends the agent's access as well.</p>
+    <p>The intersection is computed for each decision. The <a href="blog/delegating-access-to-agents.html">article on delegating access</a> follows a complete agent run.</p>
+
+    <h2 id="delegations">Narrow a single agent run</h2>
+    <p>Agent roles are fixed per agent. A <strong>delegation grant</strong> restricts one particular run further: <em>for the next 15 minutes, this agent may only read contracts for Alice</em>. Your application issues it while the user is signed in, and the agent runtime sends it with its checks in the <code>X-Delegation-Token</code> header.</p>
+    <ul>
+      <li>Decisions with a grant use <code>user ∩ agent ∩ mask ∩ grant</code>. A grant can never add a permission; requesting one outside the intersection is refused at issuance.</li>
+      <li>The grant is a signed JWT whose claims follow RFC 8693: <code>sub</code> is the user, <code>act.sub</code> the agent, <code>jti</code> the grant id. Other services can verify it with the keys from <code>/v1/delegations/jwks</code>.</li>
+      <li>Revocation is checked on every call. <code>POST /v1/delegations/revoke</code> ends all grants of an agent or user at once.</li>
+      <li>Denials name the cause: <code>not_delegated</code>, <code>delegation_expired</code>, <code>delegation_revoked</code> or <code>delegation_mismatch</code>.</li>
+    </ul>
+    <p>Grants are optional. Without the header, agent decisions behave as described in the previous section. <code>AUTHZ_DELEGATION_REQUIRED=true</code> makes a grant mandatory for every agent decision. Issuing a grant currently requires a runtime credential and trusts its holder to have authenticated the user; the grant does not yet contain proof of the user's own login.</p>
+
+    <h2 id="tools">Guard tools and MCP servers</h2>
+    <p>An agent runtime may call dozens of tools in a single run, and asking the service before every call would add latency. The Python library therefore provides guards that check against a permission set loaded once:</p>
+<pre><code>from authz_sdk import MCPGuard
+
+guard = MCPGuard(permissions)           # e.g. from get_effective_permissions
+guard.allowed_tools("github")           # ["read_repo"] -&gt; offer only these to the model
+guard.require("github", "create_issue") # raises PermissionDeniedError</code></pre>
+    <p><code>ToolGuard</code> does the same for local tools named <code>resource.action</code>, and <code>MCPGuard</code> for MCP tools named <code>mcp.&lt;server&gt;.&lt;tool&gt;</code>. <code>AgentGuard</code>, created by <code>start_agent_session</code>, adds <em>critical actions</em>: for these it asks the service again, so a revocation takes effect within the run. Offer the model only allowed tools and check again before execution. The first step keeps unusable tools out of the prompt, the second catches a call the model produces anyway.</p>
+
+    <h2 id="conditions">Add conditions on resource data</h2>
+    <p>Roles answer whether someone may approve contracts in general. Some rules depend on the particular contract, for example <em>agents may only classify contracts below 10,000 EUR</em>. The library contains a policy engine for such conditions. It runs after the role check and can only remove permissions, never add them.</p>
+<pre><code># Excerpt: store is your repository, e.g. a SqlAlchemyStore or InMemoryStore.
+from authzkit import AuthorizationEngine
+from authzkit.policies.engine import PolicyEngine, PolicyRule
+
+rule = PolicyRule(
+    name="agents-small-contracts-only", effect="deny",
+    resource="contracts", action="classify",
+    condition={"and": [{"eq": ["subject.type", "agent"]},
+                       {"gte": ["resource.amount", 10000]}]},
+)
+engine = AuthorizationEngine(store, policy_engine=PolicyEngine([rule]))</code></pre>
+    <p>The resource attributes travel in the request's <code>context</code>, for example <code>{"resource": {"amount": 25000}}</code>. With the rule above, an agent asking to classify a 25,000 EUR contract is denied with <code>policy_condition_failed</code>, while the same agent may classify a 500 EUR contract and a user may classify either. A matching <code>deny</code> rule wins; every matching <code>allow</code> rule must hold. Supported operators are <code>eq</code>, <code>ne</code>, <code>lt</code>, <code>lte</code>, <code>gt</code>, <code>gte</code>, <code>in</code>, <code>not_in</code>, <code>and</code>, <code>or</code> and <code>not</code>.</p>
+    <div class="note"><strong>Current limit:</strong> the HTTP service starts with an empty rule set and offers no API for rules yet. Conditions are available when you embed the Python library in your own process, as in the example above.</div>
+
+    <h2 id="credentials">Authenticate callers</h2>
+    <p>Every API request needs a credential; only health checks, metrics, public keys and the console's static files are open. Its <em>scope</em> decides what the caller may do: <code>admin</code> may change configuration, <code>runtime</code> may ask for decisions and manage delegation grants, and <code>tenant:&lt;id&gt;</code> limits a runtime caller to one tenant.</p>
+    <ul>
+      <li><strong>Bootstrap keys</strong> from <code>AUTHZ_API_KEYS</code> always have the admin scope. Use them to set up the service and for emergencies.</li>
+      <li><strong>Stored API keys</strong> are created in the console or through <code>/v1/api-keys</code>. Only a hash is stored. Rotating a key creates a successor with the same scopes; revoke the old key once callers have switched.</li>
+      <li><strong>OAuth access tokens</strong>: authz can accept JWTs from your own identity provider (<code>AUTHZ_OAUTH_RESOURCE_ISSUERS</code>) and can issue its own through the <code>client_credentials</code> grant at <code>/oauth/token</code> (<code>AUTHZ_OAUTH_AS_ENABLED=true</code>).</li>
+      <li><strong>Admin sign-in</strong> through your identity provider replaces pasted keys in the console with a session cookie (<code>AUTHZ_ADMIN_OIDC_*</code>).</li>
+    </ul>
+    <p>Without any configured credential, the service rejects all requests. <code>AUTHZ_DEV_MODE=true</code> accepts every caller for local experiments until the first stored key is created, and logs a warning at startup.</p>
+
+    <h2 id="console">Manage everything in the admin console</h2>
+    <p>The console at <code>/admin/</code> is part of the service and needs no separate installation. It covers tenants, applications, permissions, roles, users, memberships, agents, invitations, delegation grants, feature controls, API keys and OAuth clients. The <em>Decision probe</em> asks the engine the same question an application would, and the overview page shows a setup checklist for the selected tenant and application.</p>
+    <p>The console uses the same REST API as every other client. Changes made in it are therefore equivalent to API calls with the signed-in admin's credential.</p>
+
+    <h2 id="audit">Explain and monitor decisions</h2>
+    <p>Every refusal is written to the audit log with tenant, user, agent, permission, reason and, where present, the delegation grant. Allowed decisions are recorded as well when <code>AUTHZ_AUDIT_ALL=true</code>. The console's <em>Audit log</em> page and <code>GET /v1/audit</code> list recent entries, newest first. <code>AUTHZ_AUDIT_RETENTION_DAYS</code> deletes older entries in the background; by default nothing is deleted.</p>
+    <p><code>/metrics</code> exposes Prometheus metrics such as <code>authz_decisions_total</code>, <code>authz_decisions_by_reason_total</code> and <code>authz_decision_latency_seconds</code>. <code>/healthz</code> reports database reachability and <code>/readyz</code> readiness for load balancers.</p>
+
+    <h2 id="operations">Run several service processes</h2>
+    <p>Decisions themselves keep no state in the process, so several service instances can share one PostgreSQL database. Two optional mechanisms hold state between requests: the rate limit (<code>AUTHZ_RATE_LIMIT_PER_MINUTE</code>, off by default) and idempotent replay of POST requests. With <code>AUTHZ_REDIS_URL</code> set, both use Redis and therefore apply across processes; otherwise each process keeps its own memory.</p>
+    <p>Schema changes are shipped as Alembic migrations. The container runs them on start when <code>AUTHZ_RUN_MIGRATIONS=true</code>. The project changes the HTTP API additively: new endpoints, optional fields and new reason values are added, and existing requests keep their behaviour. The <a href="principles.html#compatibility">design principles</a> explain how this is checked.</p>
+
+    <h2 id="sdks">Choose a client library</h2>
+    <div class="table-wrap"><table><thead><tr><th>Language</th><th>Install</th><th>Covers</th></tr></thead><tbody>
+      <tr><td>Python</td><td><code>pip install "git+https://github.com/rudi77/authz.git@main"</code></td><td>Decisions, administration, delegation grants, agent sessions, tool and MCP guards, a FastAPI dependency.</td></tr>
+      <tr><td>Go</td><td><code>go get github.com/rudi77/authz/sdks/go/authz</code></td><td>Decisions with caching and retries, basic administration.</td></tr>
+      <tr><td>TypeScript</td><td>Build <code>sdks/typescript</code> and install it from a local path</td><td>Decisions, basic administration, tool and MCP guards.</td></tr>
+    </tbody></table></div>
+    <p>The Go and TypeScript clients do not yet wrap the delegation endpoints; send the <code>X-Delegation-Token</code> header yourself where needed. Any other language can use the HTTP API directly. The interactive reference at <code>/docs</code> lists every endpoint with its request and response schema.</p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="features.html">Features</a> · <a href="architecture.html">Architecture</a> · <a href="principles.html">Principles</a> · <a href="get-started.html">Get started</a> · <a href="blog/index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

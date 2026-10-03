@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>authz — decide what users and their agents may do</title>
+  <meta name="description" content="authz answers whether a user, or an AI agent working for a user, may perform an action in a tenant. Start with one decision, then add tenants, agents and delegation grants.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="principles.html">Principles</a></li>
+        <li><a href="get-started.html">Get started</a></li>
+        <li><a href="blog/index.html">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-grid">
+        <div>
+          <span class="eyebrow">Python service · SDKs for Python, Go and TypeScript · Apache-2.0</span>
+          <h1>Decide what users and their agents may do.</h1>
+          <p class="lede">authz answers one question for your applications: may this user, or an agent working for this user, perform this action in this tenant? Your application asks before it acts and enforces the answer. authz keeps the roles, records the decision and explains a refusal.</p>
+          <div class="actions">
+            <a class="btn primary" href="get-started.html">Check your first decision</a>
+            <a class="btn" href="blog/delegating-access-to-agents.html">Give an agent part of a user's access</a>
+          </div>
+        </div>
+        <div>
+<pre><code>Alice clicks "Approve contract"
+        |
+        v
+Your app asks authz:
+  may Alice do contracts.approve in ACME?
+        |
+        v
+authz checks her roles in ACME
+        |
+        v
+allow  -&gt; the app approves the contract
+deny   -&gt; the app shows an error, authz logs why</code></pre>
+          <p>Signing in stays with your identity provider, and the approval itself stays in your application. authz supplies the decision in between.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="prose">
+      <h2>Start with one decision</h2>
+      <p>authz runs as an HTTP service. With Docker installed, you can start it with a single container that stores its data in SQLite:</p>
+<pre><code>docker build -t authz https://github.com/rudi77/authz.git
+docker run --rm -p 8080:8080 -e AUTHZ_API_KEYS=dev-key -v authz-data:/data authz</code></pre>
+      <p>The admin console at <code>http://localhost:8080/admin/</code> lets you create a tenant, an application, permissions such as <code>contracts.approve</code> and a role that bundles them. Once a user holds that role, your application can ask for a decision:</p>
+<pre><code>POST /v1/authorize
+{"tenant_id": "…", "application_id": "…",
+ "subject": {"type": "user", "user_id": "…"},
+ "resource": "contracts", "action": "approve"}
+
+-&gt; {"allowed": true, "reason": "permission_granted", …}</code></pre>
+      <p>This is a shortened request; the <a href="get-started.html">getting-started guide</a> walks through the complete sequence, including how your application obtains the three ids from a signed-in user. Python applications can use the SDK instead of building requests by hand.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <h2>When access control becomes harder</h2>
+    <p class="section-intro">A single role check is easy to write directly into an application. The difficulty grows with customers who need separate settings, products that share users, and AI agents that act on someone's behalf. authz has a dedicated mechanism for each of these situations.</p>
+    <div class="cards">
+      <div class="card"><h3>Serve several customers</h3><p>Each <a href="features.html#tenants">tenant</a> has its own members and roles. A permission mask can switch off features a customer has not bought, and the refusal says so.</p></div>
+      <div class="card"><h3>Recognise users from their login</h3><p><a href="features.html#identities">resolve-context</a> turns the claims of an Entra, Cognito, Google or other OIDC token into an internal user, tenant and role set.</p></div>
+      <div class="card"><h3>Let an agent act for a user</h3><p>An <a href="features.html#agents">agent</a> receives only what both it and its user may do. A prompt cannot talk it into an action the user could not perform.</p></div>
+      <div class="card"><h3>Narrow a single agent run</h3><p>A <a href="features.html#delegations">delegation grant</a> limits one run to selected permissions and an expiry time, and can be revoked while the agent is working.</p></div>
+      <div class="card"><h3>Guard tools and MCP servers</h3><p><a href="features.html#tools">ToolGuard and MCPGuard</a> check a preloaded permission set before each tool call, without a network round trip per call.</p></div>
+      <div class="card"><h3>Explain what happened</h3><p>The <a href="features.html#audit">audit log</a> records every refusal with its reason, the user and, where relevant, the agent and grant involved.</p></div>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="prose">
+      <h2>Choose where to check</h2>
+      <p>Most applications start with one call per protected action. Agent runtimes usually load the whole permission set once per run and check locally afterwards.</p>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Situation</th><th>Call</th><th>What you get</th></tr></thead>
+      <tbody>
+        <tr><td>A user triggers a protected action in your web app</td><td><code>POST /v1/authorize</code></td><td>Allow or deny with a reason such as <code>missing_permission</code>.</td></tr>
+        <tr><td>Your UI decides which buttons to show</td><td><code>POST /v1/effective-permissions</code></td><td>Every permission the user currently holds, ready to cache.</td></tr>
+        <tr><td>An agent decides which of 30 tools it may offer the model</td><td><code>POST /v1/bulk-authorize</code></td><td>One decision per tool from a single request.</td></tr>
+        <tr><td>An agent should handle one task for a limited time</td><td><code>POST /v1/delegations</code></td><td>A signed grant the agent runtime sends with its checks.</td></tr>
+      </tbody>
+    </table></div>
+    <p class="section-intro">authz does not authenticate users and does not run tools. Its answer protects your system only where your code checks it before acting.</p>
+  </section>
+
+  <section class="wrap">
+    <div class="prose">
+      <h2>Read the implementation</h2>
+      <p>The decision logic lives in one Python class, <code>AuthorizationEngine</code>, which the service wraps in a FastAPI application. The same library can be embedded directly in a Python program. The <a href="architecture.html">architecture guide</a> follows a request from authentication to the audit record and links to the source of each step.</p>
+      <p>The test suite runs against SQLite without external services, so the decision rules can be checked on any machine. Production deployments use PostgreSQL and, for several service processes, Redis.</p>
+    </div>
+  </section>
+
+  <section class="wrap">
+    <div class="kicker">From the blog</div>
+    <h2>Recent articles</h2>
+    <ul class="post-list"><li>
+      <div class="meta">2026-10-03 · agents · authz 0.2</div>
+      <h3><a href="blog/delegating-access-to-agents.html">Giving an agent part of a user's access</a></h3>
+      <p>Follow one contract-review run: why an agent gets the intersection of its own and its user's permissions, and how a delegation grant narrows a single run further and ends it on demand.</p>
+    </li></ul>
+    <p><a href="blog/index.html">Browse the blog →</a></p>
+  </section>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="features.html">Features</a> · <a href="architecture.html">Architecture</a> · <a href="principles.html">Principles</a> · <a href="get-started.html">Get started</a> · <a href="blog/index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Design principles — authz</title>
+  <meta name="description" content="Why authz decides but does not enforce, limits agents to their user's rights, refuses incomplete setups and changes its API additively, with examples and tradeoffs.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="principles.html" aria-current="page">Principles</a></li>
+        <li><a href="get-started.html">Get started</a></li>
+        <li><a href="blog/index.html">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Design principles</div>
+  <h1>The reasons behind the design</h1>
+  <p class="section-intro">An authorization service is trusted with decisions that other systems act on without looking again. The principles below explain how authz tries to deserve that trust, which example in the code shows each one, and what it costs. Contributors can use them as review questions.</p>
+  <nav class="toc" aria-label="Page contents"><strong>On this page</strong><ol>
+    <li><a href="#decide">Decide; let the application enforce</a></li>
+    <li><a href="#agents">An agent never exceeds its user</a></li>
+    <li><a href="#fail-closed">Refuse when the setup is incomplete</a></li>
+    <li><a href="#one-engine">Keep the decision in one place</a></li>
+    <li><a href="#reasons">Explain every refusal</a></li>
+    <li><a href="#hot-path">Make the frequent check cheap</a></li>
+    <li><a href="#compatibility">Change the API additively</a></li>
+    <li><a href="#tests">Test without external services</a></li>
+  </ol></nav>
+  <div class="prose">
+    <h2 id="decide">Decide; let the application enforce</h2>
+    <p>authz answers whether an action is allowed. It does not sign users in, does not proxy requests and does not run tools. In security terms it is a <em>policy decision point</em>; the application or agent runtime that acts on the answer is the <em>policy enforcement point</em>.</p>
+    <p>This split lets one permission model serve a Python web application, a Go service and an agent runtime alike, because each of them only needs to ask a question over HTTP. The cost is that protection depends on every protected code path asking. A forgotten check is not caught by authz. The SDK helpers, such as the FastAPI dependency and the tool guards, exist to make the check hard to forget.</p>
+
+    <h2 id="agents">An agent never exceeds its user</h2>
+    <p>An agent decision always names the user the agent works for, and the result is the intersection of both permission sets. The rule is applied inside the engine, in the same function that handles users, rather than in an optional helper. An integration therefore cannot accidentally skip it.</p>
+    <p>The reasoning is that an agent's behaviour depends on text it reads, and that text can be written by someone else. If a contract contains instructions to approve it, the worst outcome should be an action the user could have performed anyway, and only one the agent's role covers. The cost is administration: each agent needs a role of its own, and an agent whose role lacks a permission cannot use it even for a user who has it. <a href="features.html#delegations">Delegation grants</a> extend the same idea to individual runs; they can only remove permissions.</p>
+
+    <h2 id="fail-closed">Refuse when the setup is incomplete</h2>
+    <p>When a required piece of configuration is missing, authz refuses instead of guessing a permissive default:</p>
+    <ul>
+      <li>Without any configured credential, every request is rejected. Accepting all callers requires the explicit setting <code>AUTHZ_DEV_MODE=true</code>, and even that switches itself off once the first stored key exists.</li>
+      <li>With PostgreSQL, the service does not create or change tables at startup. Migrations run only when someone requests them.</li>
+      <li>A signing key for grants is generated automatically only with SQLite, where it lives in the same file as the data it protects. With PostgreSQL, an operator creates or supplies one.</li>
+      <li>An agent whose user has no active membership is refused, even if the agent itself is active.</li>
+    </ul>
+    <p>The cost is visible in the getting-started guide: a first run needs an API key and, for grants on PostgreSQL, one extra command. A deployment that forgot these steps fails immediately, where a permissive default would have allowed requests nobody intended to allow.</p>
+
+    <h2 id="one-engine">Keep the decision in one place</h2>
+    <p>All decision rules live in <a href="https://github.com/rudi77/authz/blob/main/authzkit/rbac/checker.py"><code>AuthorizationEngine</code></a>. The HTTP routes translate requests and responses, the delegation check narrows the input, and the admin console calls the same API. None of them contains a second version of the rule.</p>
+    <p>When delegation grants were added, for example, the engine received an optional permission subset and applies it at the point where it already applies the tenant mask. The route only verifies the token. A reviewer can therefore check the complete decision by reading one class, and the embedded library and the service cannot drift apart.</p>
+
+    <h2 id="reasons">Explain every refusal</h2>
+    <p>A refusal carries a reason code such as <code>missing_permission</code>, <code>tenant_feature_disabled</code>, <code>no_active_membership</code> or <code>delegation_revoked</code>. The codes are distinct on purpose: each one points to a different fix. A missing permission is a role question, a disabled feature is a contract question, a missing membership is an onboarding question.</p>
+    <p>Refusals are always written to the audit log, so the explanation is available afterwards as well. Allowed decisions are not logged by default because their volume would hide the refusals; <code>AUTHZ_AUDIT_ALL=true</code> records them when an audit requires it.</p>
+
+    <h2 id="hot-path">Make the frequent check cheap</h2>
+    <p>An agent run can involve dozens of tool calls, and a page in a web application can contain many protected buttons. A network request per check would add noticeable latency. authz offers three ways to reduce this: <code>bulk-authorize</code> answers many checks for one subject from a single permission lookup, <code>effective-permissions</code> returns the whole set for local checks, and the clients can cache that set.</p>
+    <p>Local checks trade freshness for speed. A cached set does not notice a revoked role until the cache expires. The Python <code>AgentGuard</code> therefore lets you name critical actions that are always checked by the service. Choose the cache time according to how quickly a revocation must take effect for your application.</p>
+
+    <h2 id="compatibility">Change the API additively</h2>
+    <p>Applications and agent runtimes depend on the HTTP API, often in environments where they cannot be updated together with authz. Changes therefore add endpoints, optional fields, optional headers or new reason values; they do not rename or remove existing ones or change the meaning of an existing request.</p>
+    <p>The delegation grants illustrate the approach. They added new endpoints and the optional <code>X-Delegation-Token</code> header. Before the change was merged, the OpenAPI document of the service was compared with the previous version to confirm that no existing path, request body or response schema had changed, and the existing tests were kept unchanged. A request without the header behaves exactly as before. Clients should still treat unknown reason values as refusals, because new reasons can appear.</p>
+
+    <h2 id="tests">Test without external services</h2>
+    <p>The Python test suite runs the complete service in-process against temporary SQLite databases, with Redis replaced by an in-memory fake. It needs no network and no running containers, so every contributor can run it before a change. At the time of writing it contains about 230 tests, including end-to-end checks of delegation grants and the admin API.</p>
+    <p>The cost is that some production behaviour is outside the default run. PostgreSQL-specific locking and Redis's Lua scripts are not covered by the in-memory variants; changes to migrations or shared-state code need an additional check against the real services. <a href="https://github.com/rudi77/authz/blob/main/OPEN_ITEMS.md">OPEN_ITEMS.md</a> tracks these gaps.</p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="features.html">Features</a> · <a href="architecture.html">Architecture</a> · <a href="principles.html">Principles</a> · <a href="get-started.html">Get started</a> · <a href="blog/index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>
