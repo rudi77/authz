@@ -49,7 +49,11 @@ COPY --chown=authz:authz authz_service /app/authz_service
 COPY --chown=authz:authz authz_sdk /app/authz_sdk
 COPY --chown=authz:authz migrations /app/migrations
 COPY --chown=authz:authz alembic.ini /app/alembic.ini
-COPY --chown=authz:authz --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+# Strip CRs in case the build context came from a Windows checkout with
+# core.autocrlf=true; a CRLF shebang fails with "No such file or directory".
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh \
+    && chmod 0755 /usr/local/bin/docker-entrypoint.sh
 
 WORKDIR /app
 USER authz
