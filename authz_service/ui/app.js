@@ -390,6 +390,14 @@ async function api(path, options = {}) {
   return response.json();
 }
 
+// Must match authzkit.identity.base PROVIDER_* — resolve-context looks users
+// and tenant mappings up by exactly these strings.
+const PROVIDERS = [
+  { value: "azure_entra", label: "Microsoft Entra ID (azure_entra)" },
+  { value: "aws_cognito", label: "AWS Cognito (aws_cognito)" },
+  { value: "gcp_identity", label: "Google Cloud Identity (gcp_identity)" },
+  { value: "generic_oidc", label: "Any OIDC provider (generic_oidc)" },
+];
 const splitList = (v) => (v || "").split(",").map((s) => s.trim()).filter(Boolean);
 const tenantById = (id) => state.tenants.find((t) => t.id === id);
 const appById = (id) => state.applications.find((a) => a.id === id);
@@ -797,7 +805,7 @@ PAGES.tenants = async () => {
           submitLabel: "Add mapping",
           body: el("div", {},
             el("div", { class: "field-row" },
-              field("Provider", selectEl("provider", ["entra", "cognito", "gcp", "oidc"].map((v) => ({ value: v, label: v })), "entra")),
+              field("Provider", selectEl("provider", PROVIDERS, "azure_entra")),
               field("External tenant id", input("external_tenant_id", { required: true, mono: true, placeholder: "tid" }))),
             field("Issuer", input("issuer", { required: true, placeholder: "https://login.microsoftonline.com/<tid>/v2.0" }))),
           onSubmit: (fd) => api(`/v1/tenants/${t.id}/mappings`, { method: "POST", body: Object.fromEntries(fd) }),
@@ -952,7 +960,7 @@ async function addUser() {
         field("Display name", input("display_name", { placeholder: "Alice Example" })),
         field("Email", input("email", { type: "email", placeholder: "alice@acme.com" }))),
       el("div", { class: "field-row" },
-        field("Provider", selectEl("provider", ["entra", "cognito", "gcp", "oidc"].map((v) => ({ value: v, label: v })), "entra")),
+        field("Provider", selectEl("provider", PROVIDERS, "azure_entra")),
         field("Subject", input("subject", { required: true, mono: true, placeholder: "sub / oid claim" }))),
       field("Issuer", input("issuer", { required: true, placeholder: "https://login.microsoftonline.com/<tid>/v2.0" }),
         "Must match the iss claim of the user's tokens.")),
