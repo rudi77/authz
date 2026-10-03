@@ -58,6 +58,20 @@ from authz_service.observability import (
 _ADMIN_UI_DIR = Path(__file__).parent / "ui"
 
 
+class _AdminStaticFiles(StaticFiles):
+    """Static admin UI that browsers always revalidate.
+
+    Without ``Cache-Control`` browsers apply heuristic caching and can keep
+    serving an old ``index.html`` for days after an upgrade. ``no-cache``
+    still allows caching but forces a cheap ETag revalidation per load.
+    """
+
+    async def get_response(self, path, scope):  # type: ignore[no-untyped-def]
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 def _enforce_startup_safety(settings: Settings, log: BoundLogger) -> None:
     """Fail-closed startup checks for dangerous configurations.
 
@@ -260,7 +274,9 @@ def create_app() -> FastAPI:
 
     # Static admin UI — served only when the asset directory exists.
     if _ADMIN_UI_DIR.exists():
-        app.mount("/admin", StaticFiles(directory=str(_ADMIN_UI_DIR), html=True), name="admin")
+        app.mount(
+            "/admin", _AdminStaticFiles(directory=str(_ADMIN_UI_DIR), html=True), name="admin"
+        )
 
     instrument_fastapi(app)
 

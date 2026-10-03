@@ -72,7 +72,13 @@ def test_admin_ui_is_served(client: TestClient):
     r = client.get("/admin/")
     assert r.status_code == 200
     assert "AuthZ Admin" in r.text
-    assert client.get("/admin/app.js").status_code == 200
+    # Browsers must revalidate, or an upgrade keeps showing the old UI.
+    assert r.headers["cache-control"] == "no-cache"
+    js = client.get("/admin/app.js")
+    assert js.status_code == 200 and js.headers["cache-control"] == "no-cache"
+    # Conditional requests still get a cheap 304.
+    again = client.get("/admin/app.js", headers={"If-None-Match": js.headers["etag"]})
+    assert again.status_code == 304
 
 
 def test_list_and_patch_tenants_and_applications(client: TestClient):

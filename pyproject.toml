@@ -51,6 +51,10 @@ authz = "authz_service.cli:main"
 where = ["."]
 include = ["authzkit*", "authz_service*", "authz_sdk*"]
 
+[tool.setuptools.package-data]
+# Ship the static admin UI with non-editable installs too.
+authz_service = ["ui/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
