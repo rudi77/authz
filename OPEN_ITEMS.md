@@ -23,8 +23,8 @@ Follow-ups (🟨):
   overrides yet.
 - The in-memory store implements tenant-first resolution and deprecation but
   not the declarative provisioning methods (service-only, SQL store).
-- No way to re-claim management after `release-management` other than a new
-  application; `managed_by` can only be set at creation through the catalog.
+- `managed_by` is set at creation through the catalog or, for an unmanaged
+  application, through `POST /v1/applications/{app}/claim-management`.
 - 404 bodies keep the existing `{"detail": {"reason": …}}` shape; other new
   errors use `{"detail": {"error": …}}`.
 

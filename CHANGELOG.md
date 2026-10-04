@@ -23,6 +23,10 @@
   `403 application_managed_externally`. `POST
   /v1/applications/{app}/release-management` clears it (audited). The admin
   UI shows managed applications read-only.
+- `POST /v1/applications/{app}/claim-management` (admin scope): the caller
+  becomes `managed_by` of an unmanaged application (audited as
+  `management_claimed`); a no-op for its current manager; `409
+  application_managed_externally` while someone else manages it.
 - `PUT /v1/applications/{app}/tenants/{tenant}/state`: tenant, users,
   memberships and agents of one tenant in one transaction; unlisted
   memberships/agents become `disabled`; agent permissions live on an

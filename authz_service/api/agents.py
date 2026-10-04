@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
-from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
-from authz_service.management import enforce_managed_by
-from authzkit.security.principal import Principal
+from authz_service.management import managed_agent, managed_application
+from authz_service.references import require_application, require_tenant
+from authzkit.agents.models import Agent
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
+from authzkit.tenancy.models import Application
 
 router = APIRouter(prefix="/v1", tags=["agents"])
 
@@ -41,16 +42,6 @@ class AgentRolesIn(BaseModel):
     roles: list[str]
 
 
-def _resolve_pair(tenant_id: str, application_id: str, store: SqlAlchemyStore):
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-    return tenant, app
-
-
 @router.post(
     "/tenants/{tenant_id}/applications/{application_id}/agents",
     response_model=AgentOut,
@@ -59,14 +50,11 @@ def _resolve_pair(tenant_id: str, application_id: str, store: SqlAlchemyStore):
 )
 def create_agent(
     tenant_id: str,
-    application_id: str,
     body: AgentIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(managed_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> AgentOut:
-    tenant, app = _resolve_pair(tenant_id, application_id, store)
-    enforce_managed_by(app, principal, settings)
+    tenant = require_tenant(store, tenant_id)
     try:
         agent = store.create_agent(
             tenant_id=tenant.id,
@@ -103,7 +91,8 @@ def list_agents(
     application_id: str,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> list[AgentOut]:
-    tenant, app = _resolve_pair(tenant_id, application_id, store)
+    tenant = require_tenant(store, tenant_id)
+    app = require_application(store, application_id)
     return [
         AgentOut(
             id=a.id,
@@ -122,16 +111,9 @@ def list_agents(
 def set_agent_roles(
     agent_id: str,
     body: AgentRolesIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    agent: Annotated[Agent, Depends(managed_agent)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
-    agent = store.get_agent_by_id(agent_id)
-    if agent is None:
-        raise HTTPException(status_code=404, detail={"reason": "agent_not_found"})
-    app = store.get_application(agent.application_id)
-    if app is not None:
-        enforce_managed_by(app, principal, settings)
     found = store.find_assignable_roles(
         tenant_id=agent.tenant_id, application_id=agent.application_id, names=body.roles
     )

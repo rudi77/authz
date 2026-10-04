@@ -7,12 +7,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
-from authz_service.management import enforce_managed_by
-from authzkit.rbac.models import RoleScope
-from authzkit.security.principal import Principal
+from authz_service.management import managed_application, managed_role
+from authz_service.references import require_application
+from authzkit.rbac.models import Role, RoleScope
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
+from authzkit.tenancy.models import Application
 
 router = APIRouter(prefix="/v1", tags=["roles"])
 
@@ -38,27 +38,16 @@ class RolePermissionsIn(BaseModel):
     permissions: list[str]
 
 
-def _resolve_application(application_id: str, store: SqlAlchemyStore):
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-    return app
-
-
 @router.post(
     "/applications/{application_id}/roles",
     response_model=RoleOut,
     status_code=status.HTTP_201_CREATED,
 )
 def create_role(
-    application_id: str,
     body: RoleIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(managed_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> RoleOut:
-    app = _resolve_application(application_id, store)
-    enforce_managed_by(app, principal, settings)
     try:
         scope = RoleScope(body.scope)
     except ValueError as exc:
@@ -91,7 +80,7 @@ def create_role(
 def list_roles(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
 ) -> list[RoleOut]:
-    app = _resolve_application(application_id, store)
+    app = require_application(store, application_id)
     return [
         RoleOut(
             id=r.id,
@@ -110,17 +99,9 @@ def list_roles(
 def set_role_permissions(
     role_id: str,
     body: RolePermissionsIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    role: Annotated[Role, Depends(managed_role)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
-    role = store.get_role(role_id)
-    if role is None:
-        raise HTTPException(status_code=404, detail={"reason": "role_not_found"})
-    if role.application_id is not None:
-        app = store.get_application(role.application_id)
-        if app is not None:
-            enforce_managed_by(app, principal, settings)
     known = {
         p.name
         for p in store.list_application_permissions(role.application_id)

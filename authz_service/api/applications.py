@@ -5,13 +5,14 @@ from __future__ import annotations
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
-from authz_service.management import caller_label
+from authz_service.management import caller_label, managed_externally
+from authz_service.references import require_application
 from authzkit.audit.logger import AuditEntry
 from authzkit.security.principal import Principal
 from authzkit.storage import orm
@@ -93,9 +94,7 @@ def list_applications(
 def get_application(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
 ) -> ApplicationOut:
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+    app = require_application(store, application_id)
     return ApplicationOut(
         id=app.id, slug=app.slug, name=app.name, status=app.status, managed_by=app.managed_by
     )
@@ -112,9 +111,7 @@ def update_application(
     body: ApplicationPatch,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> ApplicationOut:
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+    app = require_application(store, application_id)
     with store.session() as s:
         row = s.get(orm.Application, app.id)
         if body.name is not None:
@@ -135,9 +132,7 @@ def release_management(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> ApplicationOut:
     """Emergency exit: drop ``managed_by`` so platform admins can write again."""
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+    app = require_application(store, application_id)
     released_by = caller_label(principal, settings)
     store.set_application_managed_by(app.id, None)
     store.write_audit(
@@ -158,3 +153,42 @@ def release_management(
         app.managed_by,
     )
     return ApplicationOut(id=app.id, slug=app.slug, name=app.name, status=app.status)
+
+
+@router.post(
+    "/{application_id}/claim-management",
+    response_model=ApplicationOut,
+    response_model_exclude_defaults=True,
+)
+def claim_management(
+    application_id: str,
+    principal: Annotated[Principal, Depends(require_admin)],
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ApplicationOut:
+    """Make the caller the manager of an unmanaged application (after
+    ``release-management``). 409 while someone else manages it."""
+    app = require_application(store, application_id)
+    claimed_by = caller_label(principal, settings)
+    if app.managed_by is None:
+        managed_by = store.claim_application_management(app.id, claimed_by)
+        if managed_by == claimed_by:
+            store.write_audit(
+                AuditEntry(
+                    decision="admin",
+                    reason="management_claimed",
+                    resource="application.management",
+                    action="claim",
+                    application_id=app.id,
+                    request={"claimed_by": claimed_by},
+                    response={"managed_by": claimed_by},
+                )
+            )
+            _log.warning("management of application %s claimed by %s", app.slug, claimed_by)
+    else:
+        managed_by = app.managed_by
+    if managed_by != claimed_by:
+        raise managed_externally(managed_by or "", status.HTTP_409_CONFLICT)
+    return ApplicationOut(
+        id=app.id, slug=app.slug, name=app.name, status=app.status, managed_by=managed_by
+    )

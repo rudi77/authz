@@ -21,10 +21,11 @@ from authz_service.dependencies import (
     require_admin,
     require_caller,
 )
-from authz_service.management import enforce_managed_by
+from authz_service.management import Guard
+from authz_service.references import require_tenant
 from authzkit.security.invitations import InvitationError, InvitationService
-from authzkit.security.principal import Principal
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
+from authzkit.tenancy.models import Application
 
 router = APIRouter(prefix="/v1", tags=["invitations"])
 
@@ -69,6 +70,10 @@ class InvitationAccept(BaseModel):
     claims: dict[str, Any] = Field(default_factory=dict)
 
 
+def _invitation_application(body: InvitationIn, guard: Guard) -> Application | None:
+    return guard.application(body.application_id) if body.application_id else None
+
+
 @router.post(
     "/tenants/{tenant_id}/invitations",
     response_model=InvitationCreated,
@@ -77,26 +82,14 @@ class InvitationAccept(BaseModel):
 def create_invitation(
     tenant_id: str,
     body: InvitationIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application | None, Depends(_invitation_application)],
     invitations: Annotated[InvitationService, Depends(get_invitation_service)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> InvitationCreated:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    application_id = None
-    if body.application_id:
-        app = store.get_application(body.application_id) or store.get_application_by_slug(
-            body.application_id
-        )
-        if app is None:
-            raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-        enforce_managed_by(app, principal, settings)
-        application_id = app.id
+    tenant = require_tenant(store, tenant_id)
     token = invitations.create(
         tenant_id=tenant.id,
-        application_id=application_id,
+        application_id=app.id if app else None,
         email=body.email,
         roles=body.roles,
         ttl=timedelta(days=body.ttl_days),
@@ -125,9 +118,7 @@ def list_invitations(
     invitations: Annotated[InvitationService, Depends(get_invitation_service)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> list[InvitationOut]:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    tenant = require_tenant(store, tenant_id)
     return [
         InvitationOut(
             id=r.id,

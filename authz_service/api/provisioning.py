@@ -18,14 +18,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
-from authz_service.config import Settings, get_settings
 from authz_service.dependencies import (
     enforce_tenant_scope_binding,
     get_store,
-    require_admin,
     require_runtime,
 )
-from authz_service.management import caller_label, enforce_managed_by, require_manager
+from authz_service.management import Guard, catalog_application, manager_application
+from authz_service.references import require_application, require_tenant
 from authzkit.provisioning import (
     CatalogPermission,
     CatalogRole,
@@ -37,7 +36,7 @@ from authzkit.provisioning import (
 )
 from authzkit.security.principal import Principal
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
-from authzkit.tenancy.models import Application, Tenant
+from authzkit.tenancy.models import Application
 
 router = APIRouter(prefix="/v1/applications", tags=["provisioning"])
 
@@ -99,20 +98,6 @@ class TenantRolePermissionsIn(BaseModel):
     permissions: list[str]
 
 
-def _application(app_slug: str, store: SqlAlchemyStore) -> Application:
-    app = store.get_application_by_slug(app_slug) or store.get_application(app_slug)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-    return app
-
-
-def _tenant(tenant_slug: str, store: SqlAlchemyStore) -> Tenant:
-    tenant = store.get_tenant_by_slug(tenant_slug) or store.get_tenant(tenant_slug)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    return tenant
-
-
 def _invalid(error: str, exc: ProvisioningError) -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -124,15 +109,11 @@ def _invalid(error: str, exc: ProvisioningError) -> HTTPException:
 def put_catalog(
     app_slug: str,
     body: CatalogIn,
-    principal: Annotated[Principal, Depends(require_admin)],
-    store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
+    app: Annotated[Application | None, Depends(catalog_application)],
+    guard: Guard,
 ) -> dict:
-    app = store.get_application_by_slug(app_slug) or store.get_application(app_slug)
-    if app is not None:
-        enforce_managed_by(app, principal, settings)
     try:
-        result = store.apply_application_catalog(
+        result = guard.store.apply_application_catalog(
             slug=app.slug if app else app_slug,
             name=body.name,
             permissions=[
@@ -143,7 +124,7 @@ def put_catalog(
                 CatalogRole(name=r.name, description=r.description, permissions=tuple(r.permissions))
                 for r in body.default_roles
             ],
-            managed_by=caller_label(principal, settings),
+            managed_by=guard.caller,
         )
     except ProvisioningError as exc:
         raise _invalid("invalid_catalog", exc) from exc
@@ -159,15 +140,11 @@ def put_catalog(
 
 @router.put("/{app_slug}/tenants/{tenant_slug}/state")
 def put_tenant_state(
-    app_slug: str,
     tenant_slug: str,
     body: TenantStateIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(manager_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
-    app = _application(app_slug, store)
-    require_manager(app, principal, settings)
     state = TenantState(
         name=body.name,
         status=body.status,
@@ -211,8 +188,8 @@ def list_tenant_roles(
     principal: Annotated[Principal, Depends(require_runtime)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> list[TenantRoleOut]:
-    app = _application(app_slug, store)
-    tenant = _tenant(tenant_slug, store)
+    app = require_application(store, app_slug)
+    tenant = require_tenant(store, tenant_slug)
     enforce_tenant_scope_binding(principal, tenant.id)
     return [
         TenantRoleOut(**asdict(v))
@@ -230,17 +207,13 @@ def _default_role_or_404(store: SqlAlchemyStore, app: Application, name: str) ->
     "/{app_slug}/tenants/{tenant_slug}/roles/{name}", response_model=TenantRoleOut
 )
 def put_tenant_role(
-    app_slug: str,
     tenant_slug: str,
     name: str,
     body: TenantRolePermissionsIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(manager_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> TenantRoleOut:
-    app = _application(app_slug, store)
-    require_manager(app, principal, settings)
-    tenant = _tenant(tenant_slug, store)
+    tenant = require_tenant(store, tenant_slug)
     _default_role_or_404(store, app, name)
     known = {p.name for p in store.list_application_permissions(app.id) if not p.deprecated}
     unknown = sorted(set(body.permissions) - known)
@@ -266,16 +239,12 @@ def put_tenant_role(
     response_class=Response,
 )
 def delete_tenant_role(
-    app_slug: str,
     tenant_slug: str,
     name: str,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(manager_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> Response:
-    app = _application(app_slug, store)
-    require_manager(app, principal, settings)
-    tenant = _tenant(tenant_slug, store)
+    tenant = require_tenant(store, tenant_slug)
     _default_role_or_404(store, app, name)
     store.delete_tenant_role_override(tenant_id=tenant.id, application_id=app.id, name=name)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

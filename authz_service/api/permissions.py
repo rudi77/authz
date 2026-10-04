@@ -7,12 +7,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 
-from authz_service.api.roles import _resolve_application
-from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
-from authz_service.management import enforce_managed_by
-from authzkit.security.principal import Principal
+from authz_service.management import managed_application
+from authz_service.references import require_application
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
+from authzkit.tenancy.models import Application
 
 router = APIRouter(prefix="/v1/applications", tags=["permissions"])
 
@@ -43,14 +42,10 @@ class PermissionOut(BaseModel):
     status_code=status.HTTP_201_CREATED,
 )
 def create_permission(
-    application_id: str,
     body: PermissionIn,
-    principal: Annotated[Principal, Depends(require_admin)],
+    app: Annotated[Application, Depends(managed_application)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> PermissionOut:
-    app = _resolve_application(application_id, store)
-    enforce_managed_by(app, principal, settings)
     permission = store.create_permission(
         name=body.name, application_id=app.id, description=body.description
     )
@@ -73,7 +68,7 @@ def create_permission(
 def list_permissions(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
 ) -> list[PermissionOut]:
-    app = _resolve_application(application_id, store)
+    app = require_application(store, application_id)
     return [
         PermissionOut(
             id=p.id,

@@ -242,6 +242,9 @@ Declarative provisioning (for an application owned by one client, see
   overrides of default roles
 - `POST /v1/applications/{app}/release-management` — operator's emergency
   exit: clears `managed_by` (audited)
+- `POST /v1/applications/{app}/claim-management` — the caller becomes
+  `managed_by` of an unmanaged application (audited; 409 while someone else
+  manages it)
 
 Management (admin tools, used at provisioning time):
 

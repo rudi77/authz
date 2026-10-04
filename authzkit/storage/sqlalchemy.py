@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Iterable
 from typing import Any
 
-from sqlalchemy import Engine, create_engine, delete, or_, select
+from sqlalchemy import Engine, create_engine, delete, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from authzkit.agents.models import AGENT_STATUS_DISABLED
@@ -232,6 +232,19 @@ class SqlAlchemyStore:
                 row.managed_by = managed_by
                 s.commit()
 
+    def claim_application_management(self, application_id: str, managed_by: str) -> str | None:
+        """Set ``managed_by`` only while it is null (atomic); returns the manager after the call."""
+        with self.session() as s:
+            s.execute(
+                update(orm.Application)
+                .where(orm.Application.id == application_id, orm.Application.managed_by.is_(None))
+                .values(managed_by=managed_by)
+            )
+            s.commit()
+            return s.scalar(
+                select(orm.Application.managed_by).where(orm.Application.id == application_id)
+            )
+
     # ---- Users + identities --------------------------------------------------
 
     def get_user(self, user_id: str) -> UserModel | None:
@@ -400,6 +413,11 @@ class SqlAlchemyStore:
                 return None
             names = self.membership_role_names(s, row.id)
             return self._to_membership(row, names)
+
+    def get_membership_by_id(self, membership_id: str) -> MembershipModel | None:
+        with self.session() as s:
+            row = s.get(orm.Membership, membership_id)
+            return self._to_membership(row, self.membership_role_names(s, row.id)) if row else None
 
     def list_memberships_for_user(self, user_id: str) -> list[MembershipModel]:
         with self.session() as s:

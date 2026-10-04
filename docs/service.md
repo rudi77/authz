@@ -38,6 +38,7 @@ Tenant/application accept id or slug; subjects accept `user_ref`
 | GET | `/v1/applications/{app}/tenants/{tenant}/roles` | Default roles with tenant overrides |
 | PUT/DELETE | `/v1/applications/{app}/tenants/{tenant}/roles/{name}` | Set / remove a tenant override (manager only) |
 | POST | `/v1/applications/{app}/release-management` | Clear `managed_by` (admin, audited) |
+| POST | `/v1/applications/{app}/claim-management` | Caller becomes `managed_by` of an unmanaged app; 409 if managed by someone else (admin, audited) |
 
 ### Tenants & applications
 
