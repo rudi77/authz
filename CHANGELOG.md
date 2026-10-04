@@ -40,12 +40,30 @@
   /v1/applications/{app}/tenants/{tenant}/roles[/{name}]`.
 - Contract-test fixture: `contract/docker-compose.contract.yml` (see
   `contract/README.md`).
+- Consumer deployment (`deploy/`): reference Compose stack (authz +
+  Postgres, optional Redis with `--profile ha`, no host port, healthcheck
+  `/healthz`), first-start guide (migrations, bootstrap key, management and
+  runtime clients via `authz oauth client create`, DTM `Authz:*` settings,
+  TLS, HA notes) and `deploy/verify.py`, which runs that first start on a
+  throwaway project and checks tokens, catalog/`managed_by`, tenant state,
+  decisions with references and a delegation grant on Postgres.
+- Container: `AUTHZ_OAUTH_SIGNING_KEY_PEM_FILE` — the entrypoint reads the
+  signing key from a file (docker / Kubernetes secret);
+  `AUTHZ_OAUTH_SIGNING_KEY_PEM` wins when both are set.
 - Python SDK: `UserRef`, `Subject.user_ref` / `agent_name`, reference
   arguments on `create_delegation` / `revoke_delegations`, optional
   `managed_by` / `deprecated` / `critical` / `display_name` fields.
 
 ### Fixed
 
+- **Cross-tenant existence probe:** `POST /v1/delegations` resolved the
+  tenant, `user_ref` and `agent_name` before the tenant scope binding, so a
+  tenant-bound caller could tell 404 from 403 for another tenant's tenant,
+  users and agents. The binding now runs on the resolved tenant first: a
+  caller bound to tenant A asking about tenant B gets 403
+  `tenant_scope_mismatch` whether or not B or its references exist. Same for
+  `POST /v1/delegations/revoke` and `GET
+  /v1/applications/{app}/tenants/{tenant}/roles`.
 - **Tenant isolation:** `create_membership`, `set_membership_roles` and
   `set_agent_roles` (SQL and in-memory store) selected roles by
   `(application, name)` only and could attach a tenant-bound role of

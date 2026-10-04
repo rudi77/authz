@@ -178,9 +178,16 @@ Container knobs:
 | `AUTHZ_RUN_MIGRATIONS` | `false` | `true` runs `alembic upgrade head` before start (needed for Postgres) |
 | `AUTHZ_PORT` | `8080` | Listen port inside the container |
 | `AUTHZ_API_KEYS` | — | Bootstrap admin key(s); without it every request is rejected (fail-closed) |
+| `AUTHZ_OAUTH_SIGNING_KEY_PEM_FILE` | — | File with the OAuth / delegation signing key (docker secret); `AUTHZ_OAUTH_SIGNING_KEY_PEM` wins |
 
 Images are published to `ghcr.io/rudi77/authz` — `latest` from `main`,
 `vX.Y.Z` from release tags. The container runs as non-root uid 1000.
+
+**Production next to a consumer** (Postgres, OAuth clients for the
+consumer's runtime and management side, HA notes):
+[`deploy/README.md`](deploy/README.md), with a reference
+`deploy/docker-compose.yml` and `python deploy/verify.py` to check the whole
+first start end to end.
 
 ### From source
 

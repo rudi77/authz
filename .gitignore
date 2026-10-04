@@ -224,3 +224,6 @@ sdks/typescript/package-lock.json
 
 # Contract fixture credentials and signing key (test-only, generated)
 contract/.secrets/
+
+# Consumer deployment: generated signing key and local env (see deploy/README.md)
+deploy/secrets/

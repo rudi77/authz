@@ -1,0 +1,86 @@
+# Reference deployment of authz for a consumer on the same Docker network
+# (first consumer: Digital Teammates). See deploy/README.md.
+#
+#   # variables (README "Environment") in the shell or in deploy/.env (gitignored)
+#   # signing key → deploy/secrets/signing-key.pem (README, step 1)
+#   docker compose -f deploy/docker-compose.yml up -d
+#
+# authz on Postgres, Alembic migrations on start, OAuth Authorization Server
+# on (client_credentials for the consumer's runtime and management clients,
+# signed delegation grants). No host port: the consumer reaches
+# http://authz:8080 on the `authz` network. Add `--profile ha` for Redis
+# (needed as soon as more than one authz replica runs).
+name: authz
+
+services:
+  authz-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: authz
+      POSTGRES_USER: authz
+      POSTGRES_PASSWORD: ${AUTHZ_POSTGRES_PASSWORD:?set AUTHZ_POSTGRES_PASSWORD in deploy/.env}
+    volumes:
+      - authz_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authz -d authz"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [authz]
+
+  authz-redis:
+    profiles: [ha]
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [authz]
+
+  authz:
+    image: ${AUTHZ_IMAGE:-ghcr.io/rudi77/authz:latest}
+    restart: unless-stopped
+    depends_on:
+      authz-db:
+        condition: service_healthy
+    environment:
+      AUTHZ_DATABASE_URL: postgresql+psycopg://authz:${AUTHZ_POSTGRES_PASSWORD}@authz-db:5432/authz
+      AUTHZ_RUN_MIGRATIONS: "true"
+      # Break-glass operator key (admin scope). Used for the first start and
+      # for emergencies, never by the consumer.
+      AUTHZ_API_KEYS: ${AUTHZ_BOOTSTRAP_API_KEY:?set AUTHZ_BOOTSTRAP_API_KEY in deploy/.env}
+      AUTHZ_OAUTH_AS_ENABLED: "true"
+      AUTHZ_OAUTH_ISSUER: ${AUTHZ_OAUTH_ISSUER:?set AUTHZ_OAUTH_ISSUER in deploy/.env}
+      AUTHZ_OAUTH_SIGNING_KEY_PEM_FILE: /run/secrets/authz_signing_key
+      # Empty = in-process rate limit / idempotency (one replica). With
+      # `--profile ha`: redis://authz-redis:6379/0
+      AUTHZ_REDIS_URL: ${AUTHZ_REDIS_URL:-}
+      AUTHZ_RATE_LIMIT_PER_MINUTE: ${AUTHZ_RATE_LIMIT_PER_MINUTE:-0}
+      AUTHZ_AUDIT_RETENTION_DAYS: ${AUTHZ_AUDIT_RETENTION_DAYS:-90}
+      AUTHZ_LOG_LEVEL: ${AUTHZ_LOG_LEVEL:-INFO}
+    secrets:
+      - authz_signing_key
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    networks: [authz]
+    # Uncomment to reach the admin UI / API from the host:
+    # ports:
+    #   - "127.0.0.1:8080:8080"
+
+secrets:
+  authz_signing_key:
+    file: ${AUTHZ_SIGNING_KEY_FILE:-./secrets/signing-key.pem}
+
+volumes:
+  authz_pgdata:
+
+networks:
+  authz:
+    name: ${AUTHZ_NETWORK:-authz}

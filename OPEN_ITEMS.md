@@ -14,6 +14,7 @@ Status legend: 🟥 blocker for GA · 🟧 needed for first paying customer ·
 | Item | What landed | Files |
 |---|---|---|
 | References instead of ids, declarative catalog + tenant state, `managed_by`, tenant role overrides, tenant-first role resolution, no silent success on role/permission assignment, contract fixture | see CHANGELOG "Managed applications and declarative provisioning" | `authz_service/api/provisioning.py`, `authz_service/references.py`, `authz_service/management.py`, `authzkit/storage/sqlalchemy.py`, `contract/` |
+| Consumer deployment (reference Compose, first start, client setup, HA notes, scripted verification); no cross-tenant existence probe via references | see CHANGELOG | `deploy/`, `docker-entrypoint.sh`, `authz_service/references.py` (`require_bound_tenant`) |
 
 Follow-ups (🟨):
 - Go / TypeScript SDKs lack `user_ref` / `agent_name`, the provisioning
@@ -142,8 +143,8 @@ unavailable in CI sandbox; tests run when PyJWT is installed). Update the
 |---|---|---|
 | 🟥 | **Helm chart** | `deploy/helm/` with values for: replica count, Postgres URL secret, Redis URL secret, ingress, resource limits, PDB, HPA. |
 | 🟥 | **k8s deployment manifests (non-Helm)** | For shops that don't use Helm: plain YAML with kustomize overlays. |
-| 🟧 | **Container image release process** | Tagged releases (`v0.2.0`, `v0.2.1`, …) with semver and changelog; today CI only pushes `latest` and the commit SHA. |
-| 🟧 | **Production deployment guide** | Docs covering: Postgres sizing, Redis sizing, key rotation cadence, log shipping, metrics scraping, alerting rules. |
+| 🟧 | **Container image release process** | CI pushes `ghcr.io/rudi77/authz:vX.Y.Z` for `v*` tags, but no release has been tagged yet — consumers can only pin `latest` or a commit SHA. Needs a first tag plus a semver/changelog routine. |
+| 🟧 | **Production deployment guide** | `deploy/README.md` covers the Compose deployment next to a consumer (env, first start, clients, TLS, replicas). Still missing: Postgres sizing, Redis sizing, key rotation cadence, log shipping, metrics scraping, alerting rules. |
 | 🟧 | **Standard alerting rules** | Prometheus alert rules: `authz_decisions_denied_total` rate spike, p95 latency, audit-prune failures, DB connection saturation. |
 | 🟨 | **CLI: `authz keys rotate-all-due`** | Operator command that rotates any key whose `expires_at` is within N days. |
 | 🟨 | **CLI: `authz audit export`** | Stream the audit log to JSON / Parquet for offline analytics. |
