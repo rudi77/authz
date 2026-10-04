@@ -2,29 +2,29 @@
 
 Decision and delegation endpoints accept the tenant and application by id
 or slug, the user by ``user_ref`` (provider, issuer, subject) and the agent
-by ``agent_name``. Everything is resolved here, before the tenant scope
-binding and the delegation match, so the rest of a request works on UUIDs
-only.
+by ``agent_name``. Decision references resolve in authzkit
+(``SqlAlchemyStore.resolve_references``, one session) before the tenant
+scope binding and the delegation match; the engine takes the result, so
+unknown references end in its usual deny reasons.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from fastapi import HTTPException
 
-from authzkit.rbac.checker import SUBJECT_USER
+from authzkit.provisioning import UserRef
+from authzkit.rbac.checker import ResolvedReferences
 from authzkit.service.schemas import SubjectSchema, UserRefSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.models import Application, Tenant
 
 
 def find_tenant(store: SqlAlchemyStore, ref: str) -> Tenant | None:
-    return store.get_tenant(ref) or store.get_tenant_by_slug(ref)
+    return store.find_tenant(ref)
 
 
 def find_application(store: SqlAlchemyStore, ref: str) -> Application | None:
-    return store.get_application(ref) or store.get_application_by_slug(ref)
+    return store.find_application(ref)
 
 
 def find_user_id(store: SqlAlchemyStore, ref: UserRefSchema) -> str | None:
@@ -41,55 +41,20 @@ def find_agent_id(
     return agent.id if agent else None
 
 
-@dataclass(frozen=True)
-class DecisionRefs:
-    """References of a decision request, resolved.
-
-    Unknown references keep their raw value and set ``deny_reason`` to the
-    reason the engine gives for the same situation, so an unknown reference
-    is indistinguishable from an inactive one.
-    """
-
-    tenant_id: str
-    application_id: str
-    subject: SubjectSchema
-    deny_reason: str | None = None
-
-
 def resolve_decision_refs(
     store: SqlAlchemyStore, tenant: str, application: str, subject: SubjectSchema
-) -> DecisionRefs:
-    t = find_tenant(store, tenant)
-    a = find_application(store, application)
-    deny: str | None = None
-    if t is None:
-        deny = "tenant_not_active"
-    elif a is None:
-        deny = "application_not_active"
-
-    user_id = subject.user_id
-    if subject.user_ref is not None:
-        user_id = find_user_id(store, subject.user_ref)
-        if user_id is None and deny is None:
-            deny = (
-                "no_active_membership"
-                if subject.type == SUBJECT_USER
-                else "no_active_user_membership"
-            )
-    agent_id = subject.agent_id
-    if subject.agent_name is not None:
-        agent_id = find_agent_id(store, t.id, a.id, subject.agent_name) if t and a else None
-        if agent_id is None and deny is None:
-            deny = "agent_not_active"
-
-    return DecisionRefs(
-        tenant_id=t.id if t else tenant,
-        application_id=a.id if a else application,
-        subject=subject.model_copy(
-            update={"user_id": user_id, "user_ref": None, "agent_id": agent_id, "agent_name": None}
-        ),
-        deny_reason=deny,
+) -> tuple[ResolvedReferences, SubjectSchema]:
+    """The resolved references and the subject in id form."""
+    refs = store.resolve_references(
+        tenant=tenant,
+        application=application,
+        user_id=subject.user_id,
+        user_ref=UserRef(**subject.user_ref.model_dump()) if subject.user_ref else None,
+        agent_id=subject.agent_id,
+        agent_name=subject.agent_name,
     )
+    ids = {"user_id": refs.user_id, "agent_id": refs.agent_id}
+    return refs, subject.model_copy(update={**ids, "user_ref": None, "agent_name": None})
 
 
 def require_tenant(store: SqlAlchemyStore, ref: str) -> Tenant:

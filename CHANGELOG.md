@@ -62,6 +62,16 @@
 - New response fields are omitted at their default (`managed_by` null,
   `deprecated`/`critical` false, `display_name` null) so released Python SDKs,
   which build strict dataclasses, keep working.
+- authzkit: `set_role_permissions`, `set_agent_roles` (SQL and in-memory
+  store) and `set_tenant_role_override` validate names themselves and raise
+  `UnknownNamesError` (nothing written) for unknown roles and unknown or
+  deprecated permissions; `set_role_permissions` only links permissions of
+  the role's own application.
+- authzkit: decision references resolve in the store
+  (`SqlAlchemyStore.resolve_references`, one session) and go to the engine as
+  `ResolvedReferences` on `AuthorizeRequest` / `BulkAuthorizeRequest` /
+  `effective_permissions`; the engine then skips its own tenant /
+  application / agent-by-name reads. HTTP behaviour unchanged.
 
 ## Unreleased — Admin console redesign
 

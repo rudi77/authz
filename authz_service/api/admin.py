@@ -16,6 +16,7 @@ from sqlalchemy import or_, select
 
 from authz_service.dependencies import get_store, require_admin
 from authz_service.middleware import paginate_params
+from authz_service.references import require_tenant
 from authzkit.storage import orm
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
@@ -160,9 +161,7 @@ def list_audit(
     offset, limit = paginate_params(page, page_size)
     stmt = select(orm.AuditLog).order_by(orm.AuditLog.created_at.desc())
     if tenant_id:
-        tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-        if tenant is None:
-            raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+        tenant = require_tenant(store, tenant_id)
         stmt = stmt.where(orm.AuditLog.tenant_id == tenant.id)
     if decision:
         stmt = stmt.where(orm.AuditLog.decision == decision)

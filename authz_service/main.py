@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated
 
 import structlog
-from fastapi import Depends, FastAPI, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -55,6 +55,7 @@ from authz_service.observability import (
     instrument_fastapi,
     render_metrics,
 )
+from authzkit.provisioning import UnknownNamesError
 
 _ADMIN_UI_DIR = Path(__file__).parent / "ui"
 
@@ -197,6 +198,13 @@ def create_app() -> FastAPI:
         allow_headers=cors_headers,
         allow_credentials=admin_oidc_is_enabled(settings),
     )
+
+    @app.exception_handler(UnknownNamesError)
+    def unknown_names(_: Request, exc: UnknownNamesError) -> JSONResponse:
+        # The stores validate assignments; e.g. {"error": "unknown_role", "roles": [...]}.
+        return JSONResponse(
+            status_code=422, content={"detail": {"error": exc.code, f"{exc.kind}s": exc.names}}
+        )
 
     app.include_router(authorize_router)
     app.include_router(context_router)

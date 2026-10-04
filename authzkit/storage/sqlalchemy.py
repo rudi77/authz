@@ -4,9 +4,20 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterable
-from typing import Any
+from typing import Any, TypeVar
 
-from sqlalchemy import Engine, create_engine, delete, or_, select, update
+from sqlalchemy import (
+    Column,
+    Engine,
+    Select,
+    Table,
+    create_engine,
+    delete,
+    or_,
+    select,
+    tuple_,
+    update,
+)
 from sqlalchemy.orm import Session, sessionmaker
 
 from authzkit.agents.models import AGENT_STATUS_DISABLED
@@ -24,9 +35,11 @@ from authzkit.provisioning import (
     TenantRoleView,
     TenantState,
     TenantStateResult,
+    UnknownNamesError,
     UserRef,
     agent_role_name,
 )
+from authzkit.rbac.checker import ResolvedReferences
 from authzkit.rbac.models import Permission as PermissionModel
 from authzkit.rbac.models import Role as RoleModel
 from authzkit.rbac.models import RoleScope
@@ -54,6 +67,8 @@ from authzkit.tenancy.models import (
 from authzkit.tenancy.models import (
     User as UserModel,
 )
+
+_SlugRow = TypeVar("_SlugRow", orm.Tenant, orm.Application)
 
 
 def create_engine_from_url(url: str, *, echo: bool = False) -> Engine:
@@ -192,6 +207,12 @@ class SqlAlchemyStore:
             row = s.scalar(select(orm.Tenant).where(orm.Tenant.slug == slug))
             return self._to_tenant(row) if row else None
 
+    def find_tenant(self, ref: str) -> TenantModel | None:
+        """A tenant by id or slug (one query)."""
+        with self.session() as s:
+            row = self._by_id_or_slug(s, orm.Tenant, ref)
+            return self._to_tenant(row) if row else None
+
     def is_tenant_active(self, tenant_id: str) -> bool:
         with self.session() as s:
             row = s.get(orm.Tenant, tenant_id)
@@ -219,6 +240,80 @@ class SqlAlchemyStore:
         with self.session() as s:
             row = s.scalar(select(orm.Application).where(orm.Application.slug == slug))
             return self._to_application(row) if row else None
+
+    def find_application(self, ref: str) -> ApplicationModel | None:
+        """An application by id or slug (one query)."""
+        with self.session() as s:
+            row = self._by_id_or_slug(s, orm.Application, ref)
+            return self._to_application(row) if row else None
+
+    @staticmethod
+    def _by_id_or_slug(s: Session, model: type[_SlugRow], ref: str) -> _SlugRow | None:
+        """Row whose id or slug is ``ref``; the id wins if both match different rows.
+
+        The id is only compared when ``ref`` parses as a UUID (Postgres
+        rejects anything else for a UUID column).
+        """
+        try:
+            uuid.UUID(ref)
+            match = or_(model.id == ref, model.slug == ref)
+        except ValueError:
+            match = model.slug == ref
+        rows = s.scalars(select(model).where(match)).all()
+        return next((r for r in rows if r.id == ref), rows[0] if rows else None)
+
+    def resolve_references(
+        self,
+        *,
+        tenant: str,
+        application: str,
+        user_id: str | None = None,
+        user_ref: UserRef | None = None,
+        agent_id: str | None = None,
+        agent_name: str | None = None,
+    ) -> ResolvedReferences:
+        """Resolve a decision's references in one session, one query each.
+
+        ``tenant`` / ``application`` are ids or slugs; ``user_ref`` and
+        ``agent_name`` replace ``user_id`` / ``agent_id`` when given. The
+        result goes to the engine (see :class:`ResolvedReferences`).
+        """
+        with self.session() as s:
+            t = self._by_id_or_slug(s, orm.Tenant, tenant)
+            a = self._by_id_or_slug(s, orm.Application, application)
+            if user_ref is not None:
+                user_id = s.scalar(
+                    select(orm.ExternalIdentity.user_id).where(
+                        orm.ExternalIdentity.provider == user_ref.provider,
+                        orm.ExternalIdentity.issuer == user_ref.issuer,
+                        orm.ExternalIdentity.subject == user_ref.subject,
+                    )
+                )
+            agent_status = None
+            if agent_name is not None:
+                agent = (
+                    s.execute(
+                        select(orm.Agent.id, orm.Agent.status).where(
+                            orm.Agent.tenant_id == t.id,
+                            orm.Agent.application_id == a.id,
+                            orm.Agent.name == agent_name,
+                        )
+                    ).first()
+                    if t is not None and a is not None
+                    else None
+                )
+                agent_id, agent_status = (agent.id, agent.status) if agent else (None, None)
+            return ResolvedReferences(
+                tenant_id=t.id if t else tenant,
+                application_id=a.id if a else application,
+                tenant_status=t.status if t else None,
+                application_status=a.status if a else None,
+                user_id=user_id,
+                user_missing=user_ref is not None and user_id is None,
+                agent_id=agent_id,
+                agent_status=agent_status,
+                agent_missing=agent_name is not None and agent_id is None,
+            )
 
     def is_application_active(self, application_id: str) -> bool:
         with self.session() as s:
@@ -286,28 +381,44 @@ class SqlAlchemyStore:
                     orm.ExternalIdentity.subject == subject,
                 )
             )
-            if existing is not None:
-                user = s.get(orm.User, existing.user_id)
-                return self._to_user(user), self._to_external_identity(existing)
-            user_row = orm.User(
-                id=str(uuid.uuid4()),
-                display_name=display_name,
+            user, ident = self._upsert_identity(
+                s,
+                existing,
+                UserRef(provider, issuer, subject),
                 email=email,
-            )
-            s.add(user_row)
-            s.flush()
-            ident = orm.ExternalIdentity(
-                id=str(uuid.uuid4()),
-                user_id=user_row.id,
-                provider=provider,
-                issuer=issuer,
-                subject=subject,
                 external_tenant_id=external_tenant_id,
-                email=email,
+                display_name=display_name,
             )
-            s.add(ident)
             s.commit()
-            return self._to_user(user_row), self._to_external_identity(ident)
+            return self._to_user(user), self._to_external_identity(ident)
+
+    @staticmethod
+    def _upsert_identity(
+        s: Session,
+        existing: orm.ExternalIdentity | None,
+        ref: UserRef,
+        *,
+        email: str | None,
+        external_tenant_id: str | None = None,
+        display_name: str | None = None,
+    ) -> tuple[orm.User, orm.ExternalIdentity]:
+        """The user behind ``existing``, or a new user + identity for ``ref`` (not committed)."""
+        if existing is not None:
+            return s.get_one(orm.User, existing.user_id), existing
+        user = orm.User(id=str(uuid.uuid4()), display_name=display_name, email=email)
+        ident = orm.ExternalIdentity(
+            id=str(uuid.uuid4()),
+            user_id=user.id,
+            provider=ref.provider,
+            issuer=ref.issuer,
+            subject=ref.subject,
+            external_tenant_id=external_tenant_id,
+            email=email,
+        )
+        s.add(user)
+        s.flush()  # no ORM relationship: the user row must exist before its identity
+        s.add(ident)
+        return user, ident
 
     # ---- Tenant identity mapping --------------------------------------------
 
@@ -386,12 +497,14 @@ class SqlAlchemyStore:
                 role_rows = self._assignable_roles(
                     s, tenant_id=tenant_id, application_id=application_id, names=roles
                 ).values()
-                for r in role_rows:
-                    s.execute(
-                        orm.membership_roles.insert().values(
-                            membership_id=row.id, role_id=r.id
-                        )
-                    )
+                self._replace_links(
+                    s,
+                    orm.membership_roles,
+                    "membership_id",
+                    row.id,
+                    {r.id for r in role_rows},
+                    set(),
+                )
             s.commit()
             names = self.membership_role_names(s, row.id)
             return self._to_membership(row, names)
@@ -431,23 +544,15 @@ class SqlAlchemyStore:
             membership = s.get(orm.Membership, membership_id)
             if membership is None:
                 return
-            s.execute(
-                delete(orm.membership_roles).where(
-                    orm.membership_roles.c.membership_id == membership_id
-                )
-            )
             role_rows = self._assignable_roles(
                 s,
                 tenant_id=membership.tenant_id,
                 application_id=membership.application_id,
                 names=role_names,
             ).values()
-            for r in role_rows:
-                s.execute(
-                    orm.membership_roles.insert().values(
-                        membership_id=membership_id, role_id=r.id
-                    )
-                )
+            self._replace_links(
+                s, orm.membership_roles, "membership_id", membership_id, {r.id for r in role_rows}
+            )
             s.commit()
 
     def is_user_membership_active(
@@ -574,20 +679,28 @@ class SqlAlchemyStore:
     def get_role_by_name(
         self, *, application_id: str | None, tenant_id: str | None, name: str
     ) -> RoleModel | None:
+        """A named role (never an internal per-agent role)."""
         with self.session() as s:
-            stmt = select(orm.Role).where(orm.Role.name == name)
-            stmt = (
-                stmt.where(orm.Role.application_id.is_(None))
-                if application_id is None
-                else stmt.where(orm.Role.application_id == application_id)
-            )
-            stmt = (
-                stmt.where(orm.Role.tenant_id.is_(None))
-                if tenant_id is None
-                else stmt.where(orm.Role.tenant_id == tenant_id)
-            )
-            row = s.scalar(stmt)
+            row = self._role_by_name(s, application_id, tenant_id, name)
             return self._to_role(row) if row else None
+
+    @staticmethod
+    def _named_roles(application_id: str | None, tenant_id: str | None) -> Select:
+        """Named roles of an application: application-wide (``tenant_id=None``)
+        or bound to one tenant. Internal per-agent roles are excluded."""
+        return select(orm.Role).where(
+            orm.Role.application_id.is_(None)
+            if application_id is None
+            else orm.Role.application_id == application_id,
+            orm.Role.tenant_id.is_(None) if tenant_id is None else orm.Role.tenant_id == tenant_id,
+            orm.Role.agent_id.is_(None),
+        )
+
+    @classmethod
+    def _role_by_name(
+        cls, s: Session, application_id: str | None, tenant_id: str | None, name: str
+    ) -> orm.Role | None:
+        return s.scalar(cls._named_roles(application_id, tenant_id).where(orm.Role.name == name))
 
     def list_roles_for_application(self, application_id: str) -> list[RoleModel]:
         with self.session() as s:
@@ -640,21 +753,20 @@ class SqlAlchemyStore:
             return [self._to_permission(r) for r in rows]
 
     def set_role_permissions(self, role_id: str, permission_names: set[str]) -> None:
+        """Replace a role's permissions with active ones of its application.
+
+        Raises :class:`UnknownNamesError` (nothing written) for unknown or
+        deprecated names.
+        """
         with self.session() as s:
             role = s.get(orm.Role, role_id)
             if role is None:
                 return
-            s.execute(
-                delete(orm.role_permissions).where(orm.role_permissions.c.role_id == role_id)
+            rows = self._active_permissions(s, role.application_id, permission_names)
+            UnknownNamesError.check("permission", permission_names, rows)
+            self._replace_links(
+                s, orm.role_permissions, "role_id", role_id, {p.id for p in rows.values()}
             )
-            stmt = select(orm.Permission).where(orm.Permission.name.in_(permission_names))
-            if role.application_id is not None:
-                stmt = stmt.where(orm.Permission.application_id == role.application_id)
-            permissions = s.scalars(stmt).all()
-            for p in permissions:
-                s.execute(
-                    orm.role_permissions.insert().values(role_id=role_id, permission_id=p.id)
-                )
             s.commit()
 
     # ---- Aggregated permission resolution -----------------------------------
@@ -696,7 +808,7 @@ class SqlAlchemyStore:
                 .join(orm.role_permissions, orm.role_permissions.c.permission_id == orm.Permission.id)
                 .where(
                     orm.role_permissions.c.role_id.in_(role_ids),
-                    orm.Permission.deprecated.is_(False),
+                    orm.Permission.active,
                     or_(
                         orm.Permission.application_id == application_id,
                         orm.Permission.application_id.is_(None),
@@ -729,7 +841,7 @@ class SqlAlchemyStore:
                 .join(orm.role_permissions, orm.role_permissions.c.permission_id == orm.Permission.id)
                 .where(
                     orm.role_permissions.c.role_id.in_(role_ids),
-                    orm.Permission.deprecated.is_(False),
+                    orm.Permission.active,
                 )
             ).all()
             return {r[0] for r in rows}
@@ -873,19 +985,24 @@ class SqlAlchemyStore:
         return agent is not None and agent.status == "active"
 
     def set_agent_roles(self, agent_id: str, role_names: set[str]) -> None:
+        """Replace an agent's roles (resolved tenant-first).
+
+        Raises :class:`UnknownNamesError` (nothing written) for unknown names.
+        """
         with self.session() as s:
             agent = s.get(orm.Agent, agent_id)
             if agent is None:
                 return
-            s.execute(delete(orm.agent_roles).where(orm.agent_roles.c.agent_id == agent_id))
             role_rows = self._assignable_roles(
                 s,
                 tenant_id=agent.tenant_id,
                 application_id=agent.application_id,
                 names=role_names,
-            ).values()
-            for r in role_rows:
-                s.execute(orm.agent_roles.insert().values(agent_id=agent_id, role_id=r.id))
+            )
+            UnknownNamesError.check("role", role_names, role_rows)
+            self._replace_links(
+                s, orm.agent_roles, "agent_id", agent_id, {r.id for r in role_rows.values()}
+            )
             s.commit()
 
     def list_agents(self, *, tenant_id: str, application_id: str) -> list[AgentModel]:
@@ -917,14 +1034,13 @@ class SqlAlchemyStore:
         :class:`ProvisioningError` without writing anything when invalid.
         """
         errors: list[ProvisioningIssue] = []
+        parsed: dict[str, PermissionModel] = {}
         for i, p in enumerate(permissions):
-            if "." not in p.name:
+            try:
+                parsed[p.name] = PermissionModel.from_name(p.name)
+            except ValueError as exc:
                 errors.append(
-                    ProvisioningIssue(
-                        f"permissions[{i}].name",
-                        "invalid_permission_name",
-                        f"permission name must contain '.': {p.name!r}",
-                    )
+                    ProvisioningIssue(f"permissions[{i}].name", "invalid_permission_name", str(exc))
                 )
         listed = {p.name: p for p in permissions}
         for i, r in enumerate(default_roles):
@@ -961,13 +1077,12 @@ class SqlAlchemyStore:
             for perm_name, spec in listed.items():
                 row = existing.get(perm_name)
                 if row is None:
-                    parsed = PermissionModel.from_name(perm_name)
                     row = orm.Permission(
                         id=str(uuid.uuid4()),
                         application_id=app.id,
                         name=perm_name,
-                        resource=parsed.resource,
-                        action=parsed.action,
+                        resource=parsed[perm_name].resource,
+                        action=parsed[perm_name].action,
                     )
                     s.add(row)
                     existing[perm_name] = row
@@ -979,18 +1094,11 @@ class SqlAlchemyStore:
                 if perm_name not in listed and not row.deprecated:
                     row.deprecated = True
                     deprecated += 1
-            s.flush()
 
-            roles = {
-                r.name: r
-                for r in s.scalars(
-                    select(orm.Role).where(
-                        orm.Role.application_id == app.id,
-                        orm.Role.tenant_id.is_(None),
-                        orm.Role.agent_id.is_(None),
-                    )
-                ).all()
-            }
+            roles = {r.name: r for r in s.scalars(self._named_roles(app.id, None)).all()}
+            current = self._links(
+                s, orm.role_permissions, "role_id", [r.id for r in roles.values()]
+            )
             roles_created = roles_updated = 0
             for spec_role in default_roles:
                 role = roles.get(spec_role.name)
@@ -1007,9 +1115,16 @@ class SqlAlchemyStore:
                 else:
                     roles_updated += 1
                 role.description = spec_role.description
-                s.flush()
-                self._replace_role_permissions(
-                    s, role.id, {existing[n].id for n in spec_role.permissions}
+            s.flush()
+            for spec_role in default_roles:
+                role = roles[spec_role.name]
+                self._replace_links(
+                    s,
+                    orm.role_permissions,
+                    "role_id",
+                    role.id,
+                    {existing[n].id for n in spec_role.permissions},
+                    current.get(role.id, set()),
                 )
             s.commit()
             return CatalogResult(
@@ -1021,33 +1136,63 @@ class SqlAlchemyStore:
             )
 
     @staticmethod
-    def _replace_role_permissions(s: Session, role_id: str, permission_ids: set[str]) -> bool:
-        """Set a role's permission links; returns whether anything changed."""
-        current = set(
-            s.scalars(
-                select(orm.role_permissions.c.permission_id).where(
-                    orm.role_permissions.c.role_id == role_id
-                )
-            ).all()
-        )
-        if current == permission_ids:
+    def _link_columns(table: Table, owner_col: str) -> tuple[Column, Column]:
+        """(owner, other) key columns of a two-key link table."""
+        owner = table.c[owner_col]
+        return owner, next(c for c in table.primary_key.columns if c is not owner)
+
+    @staticmethod
+    def _links(
+        s: Session, table: Table, owner_col: str, owner_ids: Iterable[str]
+    ) -> dict[str, set[str]]:
+        """Current link rows of a two-column link table, per owner, in one query."""
+        ids = list(owner_ids)
+        if not ids:
+            return {}
+        owner, other = SqlAlchemyStore._link_columns(table, owner_col)
+        out: dict[str, set[str]] = {}
+        for owner_id, other_id in s.execute(select(owner, other).where(owner.in_(ids))).all():
+            out.setdefault(owner_id, set()).add(other_id)
+        return out
+
+    @staticmethod
+    def _replace_links(
+        s: Session,
+        table: Table,
+        owner_col: str,
+        owner_id: str,
+        ids: set[str],
+        current: set[str] | None = None,
+    ) -> bool:
+        """Make ``owner_id``'s links in ``table`` exactly ``ids``; returns whether
+        anything changed. ``current`` skips the read when already known."""
+        owner, other = SqlAlchemyStore._link_columns(table, owner_col)
+        if current is None:
+            current = set(s.scalars(select(other).where(owner == owner_id)).all())
+        if current == ids:
             return False
-        s.execute(delete(orm.role_permissions).where(orm.role_permissions.c.role_id == role_id))
-        for pid in permission_ids:
-            s.execute(orm.role_permissions.insert().values(role_id=role_id, permission_id=pid))
+        if current - ids:
+            s.execute(delete(table).where(owner == owner_id, other.in_(current - ids)))
+        if ids - current:
+            s.execute(
+                table.insert(), [{owner_col: owner_id, other.name: i} for i in ids - current]
+            )
         return True
 
     @staticmethod
-    def _active_permissions(s: Session, application_id: str) -> dict[str, orm.Permission]:
-        return {
-            p.name: p
-            for p in s.scalars(
-                select(orm.Permission).where(
-                    orm.Permission.application_id == application_id,
-                    orm.Permission.deprecated.is_(False),
-                )
-            ).all()
-        }
+    def _active_permissions(
+        s: Session, application_id: str | None, names: Iterable[str] | None = None
+    ) -> dict[str, orm.Permission]:
+        """Assignable permissions of an application (``None``: platform ones), by name."""
+        stmt = select(orm.Permission).where(
+            orm.Permission.application_id.is_(None)
+            if application_id is None
+            else orm.Permission.application_id == application_id,
+            orm.Permission.active,
+        )
+        if names is not None:
+            stmt = stmt.where(orm.Permission.name.in_(set(names)))
+        return {p.name: p for p in s.scalars(stmt).all()}
 
     def apply_tenant_state(
         self, *, application_id: str, tenant_slug: str, state: TenantState
@@ -1068,7 +1213,9 @@ class SqlAlchemyStore:
                 application_id=application_id,
                 names={n for m in state.members for n in m.roles},
             )
-            perm_rows = self._active_permissions(s, application_id)
+            perm_rows = self._active_permissions(
+                s, application_id, {p for a in state.agents for p in a.permissions}
+            )
             self._validate_tenant_state(state, role_rows, perm_rows)
 
             if tenant is None:
@@ -1145,8 +1292,8 @@ class SqlAlchemyStore:
         if errors:
             raise ProvisioningError(errors)
 
-    @staticmethod
     def _apply_members(
+        self,
         s: Session,
         tenant_id: str,
         application_id: str,
@@ -1154,94 +1301,90 @@ class SqlAlchemyStore:
         role_rows: dict[str, orm.Role],
         result: TenantStateResult,
     ) -> None:
-        desired_users: set[str] = set()
-        for m in members:
-            ident = s.scalar(
-                select(orm.ExternalIdentity).where(
-                    orm.ExternalIdentity.provider == m.user_ref.provider,
-                    orm.ExternalIdentity.issuer == m.user_ref.issuer,
-                    orm.ExternalIdentity.subject == m.user_ref.subject,
-                )
-            )
-            if ident is None:
-                user = orm.User(id=str(uuid.uuid4()), display_name=m.display_name, email=m.email)
-                s.add(user)
-                s.flush()
-                s.add(
-                    orm.ExternalIdentity(
-                        id=str(uuid.uuid4()),
-                        user_id=user.id,
-                        provider=m.user_ref.provider,
-                        issuer=m.user_ref.issuer,
-                        subject=m.user_ref.subject,
-                        email=m.email,
+        """Set-based: identities, users, memberships and their roles are read
+        in one query each, diffed in memory, then written."""
+        refs = [(m.user_ref.provider, m.user_ref.issuer, m.user_ref.subject) for m in members]
+        identities = (
+            {
+                (i.provider, i.issuer, i.subject): i
+                for i in s.scalars(
+                    select(orm.ExternalIdentity).where(
+                        tuple_(
+                            orm.ExternalIdentity.provider,
+                            orm.ExternalIdentity.issuer,
+                            orm.ExternalIdentity.subject,
+                        ).in_(refs)
                     )
-                )
-                user_id = user.id
-            else:
-                user_id = ident.user_id
-                existing_user = s.get(orm.User, user_id)
-                if existing_user is not None:
-                    if m.display_name is not None:
-                        existing_user.display_name = m.display_name
-                    if m.email is not None:
-                        existing_user.email = m.email
-            desired_users.add(user_id)
-
-            role_ids = {role_rows[n].id for n in m.roles}
-            membership = s.scalar(
+                ).all()
+            }
+            if refs
+            else {}
+        )
+        user_ids = [i.user_id for i in identities.values()]
+        users = (
+            {u.id: u for u in s.scalars(select(orm.User).where(orm.User.id.in_(user_ids))).all()}
+            if user_ids
+            else {}
+        )
+        memberships = {
+            m.user_id: m
+            for m in s.scalars(
                 select(orm.Membership).where(
                     orm.Membership.tenant_id == tenant_id,
                     orm.Membership.application_id == application_id,
-                    orm.Membership.user_id == user_id,
                 )
-            )
+            ).all()
+        }
+        current_roles = self._links(
+            s, orm.membership_roles, "membership_id", [m.id for m in memberships.values()]
+        )
+
+        desired: list[tuple[orm.Membership, set[str], set[str]]] = []
+        desired_users: set[str] = set()
+        for m, ref in zip(members, refs, strict=True):
+            ident = identities.get(ref)
+            if ident is not None:
+                user = users[ident.user_id]
+            else:
+                user, _ = self._upsert_identity(
+                    s, None, m.user_ref, email=m.email, display_name=m.display_name
+                )
+            if m.display_name is not None:
+                user.display_name = m.display_name
+            if m.email is not None:
+                user.email = m.email
+            desired_users.add(user.id)
+
+            role_ids = {role_rows[n].id for n in m.roles}
+            membership = memberships.get(user.id)
             if membership is None:
                 membership = orm.Membership(
                     id=str(uuid.uuid4()),
                     tenant_id=tenant_id,
                     application_id=application_id,
-                    user_id=user_id,
+                    user_id=user.id,
                     status=m.status,
                 )
                 s.add(membership)
-                s.flush()
                 current: set[str] = set()
                 result.members.created += 1
             else:
-                current = set(
-                    s.scalars(
-                        select(orm.membership_roles.c.role_id).where(
-                            orm.membership_roles.c.membership_id == membership.id
-                        )
-                    ).all()
-                )
+                current = current_roles.get(membership.id, set())
                 if current != role_ids or membership.status != m.status:
                     result.members.updated += 1
                 membership.status = m.status
-            if current != role_ids:
-                s.execute(
-                    delete(orm.membership_roles).where(
-                        orm.membership_roles.c.membership_id == membership.id
-                    )
-                )
-                for rid in role_ids:
-                    s.execute(
-                        orm.membership_roles.insert().values(
-                            membership_id=membership.id, role_id=rid
-                        )
-                    )
+            desired.append((membership, role_ids, current))
 
-        for other in s.scalars(
-            select(orm.Membership).where(
-                orm.Membership.tenant_id == tenant_id,
-                orm.Membership.application_id == application_id,
-                orm.Membership.user_id.not_in(desired_users),
-                orm.Membership.status != MEMBERSHIP_STATUS_DISABLED,
+        s.flush()  # new users / memberships exist before their link rows
+        for membership, role_ids, current in desired:
+            self._replace_links(
+                s, orm.membership_roles, "membership_id", membership.id, role_ids, current
             )
-        ).all():
-            other.status = MEMBERSHIP_STATUS_DISABLED
-            result.members.disabled += 1
+
+        for user_id, other in memberships.items():
+            if user_id not in desired_users and other.status != MEMBERSHIP_STATUS_DISABLED:
+                other.status = MEMBERSHIP_STATUS_DISABLED
+                result.members.disabled += 1
 
     def _apply_agents(
         self,
@@ -1252,14 +1395,34 @@ class SqlAlchemyStore:
         perm_rows: dict[str, orm.Permission],
         result: TenantStateResult,
     ) -> None:
-        for a in agents:
-            agent = s.scalar(
+        """Set-based like :meth:`_apply_members`: agents, their internal roles,
+        agent-role links and role permissions are read in one query each."""
+        existing = {
+            a.name: a
+            for a in s.scalars(
                 select(orm.Agent).where(
                     orm.Agent.tenant_id == tenant_id,
                     orm.Agent.application_id == application_id,
-                    orm.Agent.name == a.name,
                 )
-            )
+            ).all()
+        }
+        agent_ids = [a.id for a in existing.values()]
+        internal_roles = (
+            {
+                r.agent_id: r
+                for r in s.scalars(select(orm.Role).where(orm.Role.agent_id.in_(agent_ids))).all()
+            }
+            if agent_ids
+            else {}
+        )
+        current_links = self._links(s, orm.agent_roles, "agent_id", agent_ids)
+        current_perms = self._links(
+            s, orm.role_permissions, "role_id", [r.id for r in internal_roles.values()]
+        )
+
+        rows: list[tuple[DesiredAgent, orm.Agent, bool, bool]] = []
+        for a in agents:
+            agent = existing.get(a.name)
             created = agent is None
             changed = False
             if agent is None:
@@ -1272,13 +1435,16 @@ class SqlAlchemyStore:
                     status=a.status,
                 )
                 s.add(agent)
-                s.flush()
             elif agent.status != a.status or agent.display_name != a.display_name:
                 agent.status = a.status
                 agent.display_name = a.display_name
                 changed = True
+            rows.append((a, agent, created, changed))
+        s.flush()  # new agents exist before their internal roles (no ORM relationship)
 
-            role = s.scalar(select(orm.Role).where(orm.Role.agent_id == agent.id))
+        planned: list[tuple[orm.Agent, orm.Role, set[str], bool, bool]] = []
+        for a, agent, created, changed in rows:
+            role = internal_roles.get(agent.id)
             if role is None:
                 role = orm.Role(
                     id=str(uuid.uuid4()),
@@ -1291,81 +1457,63 @@ class SqlAlchemyStore:
                     agent_id=agent.id,
                 )
                 s.add(role)
-                s.flush()
-            if self._replace_role_permissions(s, role.id, {perm_rows[n].id for n in a.permissions}):
+            permission_ids = {perm_rows[n].id for n in a.permissions}
+            planned.append((agent, role, permission_ids, created, changed))
+
+        s.flush()  # new roles exist before their link rows
+        for agent, role, permission_ids, created, changed in planned:
+            current = current_perms.get(role.id, set())
+            if self._replace_links(
+                s, orm.role_permissions, "role_id", role.id, permission_ids, current
+            ):
                 changed = True
-            links = set(
-                s.scalars(
-                    select(orm.agent_roles.c.role_id).where(orm.agent_roles.c.agent_id == agent.id)
-                ).all()
-            )
-            if links != {role.id}:
-                s.execute(delete(orm.agent_roles).where(orm.agent_roles.c.agent_id == agent.id))
-                s.execute(orm.agent_roles.insert().values(agent_id=agent.id, role_id=role.id))
+            current = current_links.get(agent.id, set())
+            if self._replace_links(s, orm.agent_roles, "agent_id", agent.id, {role.id}, current):
                 changed = True
             if created:
                 result.agents.created += 1
             elif changed:
                 result.agents.updated += 1
 
-        for other in s.scalars(
-            select(orm.Agent).where(
-                orm.Agent.tenant_id == tenant_id,
-                orm.Agent.application_id == application_id,
-                orm.Agent.name.not_in({a.name for a in agents}),
-                orm.Agent.status != AGENT_STATUS_DISABLED,
-            )
-        ).all():
-            other.status = AGENT_STATUS_DISABLED
-            result.agents.disabled += 1
+        listed = {a.name for a in agents}
+        for name, other in existing.items():
+            if name not in listed and other.status != AGENT_STATUS_DISABLED:
+                other.status = AGENT_STATUS_DISABLED
+                result.agents.disabled += 1
 
     def list_tenant_roles(self, *, tenant_id: str, application_id: str) -> list[TenantRoleView]:
         """Default (application-wide) roles as seen by one tenant, overrides applied."""
         with self.session() as s:
             defaults = s.scalars(
-                select(orm.Role)
-                .where(
-                    orm.Role.application_id == application_id,
-                    orm.Role.tenant_id.is_(None),
-                    orm.Role.agent_id.is_(None),
-                )
-                .order_by(orm.Role.name)
+                self._named_roles(application_id, None).order_by(orm.Role.name)
             ).all()
             overrides = {
-                r.name: r
-                for r in s.scalars(
-                    select(orm.Role).where(
-                        orm.Role.application_id == application_id,
-                        orm.Role.tenant_id == tenant_id,
-                        orm.Role.agent_id.is_(None),
-                    )
-                ).all()
+                r.name: r for r in s.scalars(self._named_roles(application_id, tenant_id)).all()
             }
-
-            def names(role_id: str) -> list[str]:
-                return sorted(
-                    s.scalars(
-                        select(orm.Permission.name)
-                        .join(
-                            orm.role_permissions,
-                            orm.role_permissions.c.permission_id == orm.Permission.id,
-                        )
-                        .where(
-                            orm.role_permissions.c.role_id == role_id,
-                            orm.Permission.deprecated.is_(False),
-                        )
-                    ).all()
-                )
+            role_ids = [r.id for r in defaults] + [r.id for r in overrides.values()]
+            names: dict[str, list[str]] = {}
+            if role_ids:
+                for role_id, perm_name in s.execute(
+                    select(orm.role_permissions.c.role_id, orm.Permission.name)
+                    .join(
+                        orm.role_permissions,
+                        orm.role_permissions.c.permission_id == orm.Permission.id,
+                    )
+                    .where(orm.role_permissions.c.role_id.in_(role_ids), orm.Permission.active)
+                ).all():
+                    names.setdefault(role_id, []).append(perm_name)
 
             views: list[TenantRoleView] = []
             for d in defaults:
-                default_permissions = names(d.id)
+                default_permissions = sorted(names.get(d.id, []))
                 override = overrides.get(d.name)
                 views.append(
                     TenantRoleView(
                         name=d.name,
                         source="tenant" if override else "application",
-                        permissions=names(override.id) if override else default_permissions,
+                        permissions=sorted(names.get(override.id, []))
+                        if override
+                        else default_permissions,
                         default_permissions=default_permissions,
                     )
                 )
@@ -1376,26 +1524,16 @@ class SqlAlchemyStore:
     ) -> None:
         """Create or replace a tenant's override of the default role ``name``.
 
-        Callers validate that the default role and the permissions exist.
+        Callers check that the default role exists. Raises
+        :class:`UnknownNamesError` (nothing written) for unknown or
+        deprecated permissions.
         """
         with self.session() as s:
-            role = s.scalar(
-                select(orm.Role).where(
-                    orm.Role.application_id == application_id,
-                    orm.Role.tenant_id == tenant_id,
-                    orm.Role.agent_id.is_(None),
-                    orm.Role.name == name,
-                )
-            )
+            perm_rows = self._active_permissions(s, application_id, permissions)
+            UnknownNamesError.check("permission", permissions, perm_rows)
+            role = self._role_by_name(s, application_id, tenant_id, name)
             if role is None:
-                default = s.scalar(
-                    select(orm.Role).where(
-                        orm.Role.application_id == application_id,
-                        orm.Role.tenant_id.is_(None),
-                        orm.Role.agent_id.is_(None),
-                        orm.Role.name == name,
-                    )
-                )
+                default = self._role_by_name(s, application_id, None, name)
                 role = orm.Role(
                     id=str(uuid.uuid4()),
                     name=name,
@@ -1406,8 +1544,9 @@ class SqlAlchemyStore:
                 )
                 s.add(role)
                 s.flush()
-            perm_rows = self._active_permissions(s, application_id)
-            self._replace_role_permissions(s, role.id, {perm_rows[n].id for n in permissions})
+            self._replace_links(
+                s, orm.role_permissions, "role_id", role.id, {p.id for p in perm_rows.values()}
+            )
             s.commit()
 
     def delete_tenant_role_override(
@@ -1415,24 +1554,10 @@ class SqlAlchemyStore:
     ) -> None:
         """Remove a tenant override; holders of it keep the default role."""
         with self.session() as s:
-            override = s.scalar(
-                select(orm.Role).where(
-                    orm.Role.application_id == application_id,
-                    orm.Role.tenant_id == tenant_id,
-                    orm.Role.agent_id.is_(None),
-                    orm.Role.name == name,
-                )
-            )
+            override = self._role_by_name(s, application_id, tenant_id, name)
             if override is None:
                 return
-            default = s.scalar(
-                select(orm.Role).where(
-                    orm.Role.application_id == application_id,
-                    orm.Role.tenant_id.is_(None),
-                    orm.Role.agent_id.is_(None),
-                    orm.Role.name == name,
-                )
-            )
+            default = self._role_by_name(s, application_id, None, name)
             for table, key in (
                 (orm.membership_roles, orm.membership_roles.c.membership_id),
                 (orm.agent_roles, orm.agent_roles.c.agent_id),

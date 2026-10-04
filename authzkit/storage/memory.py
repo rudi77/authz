@@ -12,6 +12,7 @@ from dataclasses import replace
 from typing import Any
 
 from authzkit.agents.models import Agent
+from authzkit.provisioning import UnknownNamesError
 from authzkit.rbac.models import Permission, Role, RoleScope
 from authzkit.tenancy.models import (
     MEMBERSHIP_STATUS_ACTIVE,
@@ -339,10 +340,18 @@ class InMemoryStore:
         return [p for pid, p in self.permissions.items() if pid in ids]
 
     def set_role_permissions(self, role_id: str, permission_names: set[str]) -> None:
-        permission_ids = {
-            p.id for p in self.permissions.values() if p.name in permission_names
+        """Same contract as the SQL store: active permissions of the role's
+        application only; :class:`UnknownNamesError` otherwise."""
+        role = self.roles.get(role_id)
+        if role is None:
+            return
+        found = {
+            p.name: p.id
+            for p in self.list_application_permissions(role.application_id)
+            if p.active and p.name in permission_names
         }
-        self.role_permissions[role_id] = permission_ids
+        UnknownNamesError.check("permission", permission_names, found)
+        self.role_permissions[role_id] = set(found.values())
 
     # ---- Aggregated permission resolution -----------------------------------
 
@@ -366,7 +375,7 @@ class InMemoryStore:
             linked = self.membership_roles.get(m.id, set())
             for role_id in self._effective_role_ids(tenant_id, linked):
                 for p in self.list_role_permissions(role_id):
-                    if p.application_id in (application_id, None) and not p.deprecated:
+                    if p.application_id in (application_id, None) and p.active:
                         permissions.add(p.name)
         return permissions
 
@@ -379,7 +388,7 @@ class InMemoryStore:
         permissions: set[str] = set()
         for role_id in self._effective_role_ids(tenant_id, self.agent_roles.get(agent_id, set())):
             for p in self.list_role_permissions(role_id):
-                if not p.deprecated:
+                if p.active:
                     permissions.add(p.name)
         return permissions
 
@@ -467,10 +476,11 @@ class InMemoryStore:
         return agent is not None and agent.status == "active"
 
     def set_agent_roles(self, agent_id: str, role_names: set[str]) -> None:
-        agent = self.agents[agent_id]
-        self.agent_roles[agent_id] = {
-            r.id
-            for r in self.find_assignable_roles(
-                tenant_id=agent.tenant_id, application_id=agent.application_id, names=role_names
-            ).values()
-        }
+        agent = self.agents.get(agent_id)
+        if agent is None:
+            return
+        found = self.find_assignable_roles(
+            tenant_id=agent.tenant_id, application_id=agent.application_id, names=role_names
+        )
+        UnknownNamesError.check("role", role_names, found)
+        self.agent_roles[agent_id] = {r.id for r in found.values()}

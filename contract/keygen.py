@@ -11,8 +11,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from authzkit.security.signing_keys import _generate_rsa_keypair
 
 
 def main() -> None:
@@ -22,14 +21,8 @@ def main() -> None:
         print(f"signing key present: {path}")
         return
     out.mkdir(parents=True, exist_ok=True)
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    path.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM,
-            serialization.PrivateFormat.PKCS8,
-            serialization.NoEncryption(),
-        )
-    )
+    pem, _ = _generate_rsa_keypair()  # same RSA-2048 PKCS#8 key the service generates
+    path.write_bytes(pem.encode("ascii"))
     print(f"signing key created: {path}")
 
 

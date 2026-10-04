@@ -99,20 +99,9 @@ def list_roles(
 def set_role_permissions(
     role_id: str,
     body: RolePermissionsIn,
-    role: Annotated[Role, Depends(managed_role)],
+    _: Annotated[Role, Depends(managed_role)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
-    known = {
-        p.name
-        for p in store.list_application_permissions(role.application_id)
-        if not p.deprecated
-    }
-    unknown = sorted(set(body.permissions) - known)
-    if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "unknown_permission", "permissions": unknown},
-        )
     store.set_role_permissions(role_id, set(body.permissions))
     permissions = store.list_role_permissions(role_id)
     return {"role_id": role_id, "permissions": sorted(p.name for p in permissions)}

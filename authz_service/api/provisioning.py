@@ -35,6 +35,7 @@ from authzkit.provisioning import (
     UserRef,
 )
 from authzkit.security.principal import Principal
+from authzkit.service.schemas import UserRefSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.models import Application
 
@@ -59,14 +60,8 @@ class CatalogIn(BaseModel):
     default_roles: list[CatalogRoleIn] = []
 
 
-class UserRefIn(BaseModel):
-    provider: str = Field(min_length=1)
-    issuer: str = Field(min_length=1)
-    subject: str = Field(min_length=1)
-
-
 class MemberIn(BaseModel):
-    user_ref: UserRefIn
+    user_ref: UserRefSchema
     display_name: str | None = None
     email: str | None = None
     roles: list[str] = []
@@ -198,8 +193,7 @@ def list_tenant_roles(
 
 
 def _default_role_or_404(store: SqlAlchemyStore, app: Application, name: str) -> None:
-    role = store.get_role_by_name(application_id=app.id, tenant_id=None, name=name)
-    if role is None or role.agent_id is not None:
+    if store.get_role_by_name(application_id=app.id, tenant_id=None, name=name) is None:
         raise HTTPException(status_code=404, detail={"reason": "role_not_found"})
 
 
@@ -215,13 +209,6 @@ def put_tenant_role(
 ) -> TenantRoleOut:
     tenant = require_tenant(store, tenant_slug)
     _default_role_or_404(store, app, name)
-    known = {p.name for p in store.list_application_permissions(app.id) if not p.deprecated}
-    unknown = sorted(set(body.permissions) - known)
-    if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "unknown_permission", "permissions": unknown},
-        )
     store.set_tenant_role_override(
         tenant_id=tenant.id, application_id=app.id, name=name, permissions=set(body.permissions)
     )

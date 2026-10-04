@@ -8,6 +8,7 @@ problems are collected and reported together instead of being dropped.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 STATUS_ACTIVE = "active"
@@ -33,6 +34,29 @@ class ProvisioningError(Exception):
     def __init__(self, errors: list[ProvisioningIssue]) -> None:
         super().__init__(f"{len(errors)} provisioning error(s)")
         self.errors = errors
+
+
+class UnknownNamesError(ProvisioningError):
+    """Assignment of names that do not resolve: unknown or deprecated
+    permissions (``kind="permission"``) or unknown roles (``kind="role"``).
+    Nothing was written."""
+
+    def __init__(self, kind: str, names: Iterable[str]) -> None:
+        self.kind = kind
+        self.names = sorted(set(names))
+        self.code = f"unknown_{kind}"
+        super().__init__(
+            [
+                ProvisioningIssue(f"{kind}s", self.code, f"{kind} {n!r} does not exist")
+                for n in self.names
+            ]
+        )
+
+    @staticmethod
+    def check(kind: str, wanted: Iterable[str], found: Iterable[str]) -> None:
+        unknown = set(wanted) - set(found)
+        if unknown:
+            raise UnknownNamesError(kind, unknown)
 
 
 # ---- Application catalog ----------------------------------------------------

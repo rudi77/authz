@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 
-from authz_service.api.delegations import apply_delegation
+from authz_service.api.delegations import DelegationOutcome, apply_delegation
 from authz_service.config import Settings, get_settings
 from authz_service.dependencies import (
     AuditSink,
@@ -26,6 +26,7 @@ from authzkit.rbac.checker import (
     AuthorizeDecision,
     AuthorizeRequest,
     BulkAuthorizeRequest,
+    ResolvedReferences,
     Subject,
 )
 from authzkit.security.delegations import DelegationService
@@ -61,6 +62,12 @@ def _audit_payload(request, grant_id: str | None) -> dict:
     return payload
 
 
+def _delegation_deny(refs: ResolvedReferences, delegation: DelegationOutcome) -> str | None:
+    """An unknown reference outranks a delegation problem: the engine denies
+    it with its own reason (it gets ``refs``), as for an inactive row."""
+    return delegation.deny_reason if refs.complete else None
+
+
 def _to_subject(s: SubjectSchema) -> Subject:
     return Subject(
         type=s.type,
@@ -85,7 +92,7 @@ def authorize(
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
     x_delegation_token: DelegationHeader = None,
 ) -> AuthorizeResponseSchema:
-    refs = resolve_decision_refs(
+    refs, subject = resolve_decision_refs(
         store, request.tenant_id, request.application_id, request.subject
     )
     enforce_tenant_scope_binding(principal, refs.tenant_id)
@@ -93,11 +100,11 @@ def authorize(
         token=x_delegation_token,
         tenant_id=refs.tenant_id,
         application_id=refs.application_id,
-        subject=refs.subject,
+        subject=subject,
         delegations=delegations,
         settings=settings,
     )
-    deny_reason = refs.deny_reason or delegation.deny_reason
+    deny_reason = _delegation_deny(refs, delegation)
     with DECISION_LATENCY.labels("authorize").time():
         if deny_reason is not None:
             decision = AuthorizeDecision.deny(deny_reason, f"{request.resource}.{request.action}")
@@ -111,6 +118,7 @@ def authorize(
                     action=request.action,
                     context=request.context,
                     delegated_permissions=delegation.permissions,
+                    references=refs,
                 )
             )
     response = AuthorizeResponseSchema(
@@ -160,7 +168,7 @@ def bulk_authorize(
     request_id: Annotated[str | None, Header(alias="X-Request-Id")] = None,
     x_delegation_token: DelegationHeader = None,
 ) -> BulkAuthorizeResponseSchema:
-    refs = resolve_decision_refs(
+    refs, subject = resolve_decision_refs(
         store, request.tenant_id, request.application_id, request.subject
     )
     enforce_tenant_scope_binding(principal, refs.tenant_id)
@@ -168,11 +176,11 @@ def bulk_authorize(
         token=x_delegation_token,
         tenant_id=refs.tenant_id,
         application_id=refs.application_id,
-        subject=refs.subject,
+        subject=subject,
         delegations=delegations,
         settings=settings,
     )
-    deny_reason = refs.deny_reason or delegation.deny_reason
+    deny_reason = _delegation_deny(refs, delegation)
     with DECISION_LATENCY.labels("bulk-authorize").time():
         if deny_reason is not None:
             decisions = [
@@ -188,6 +196,7 @@ def bulk_authorize(
                     checks=[(c.resource, c.action) for c in request.checks],
                     context=request.context,
                     delegated_permissions=delegation.permissions,
+                    references=refs,
                 )
             )
     for d in decisions:
@@ -240,23 +249,23 @@ def effective_permissions(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     x_delegation_token: DelegationHeader = None,
 ) -> EffectivePermissionsResponseSchema:
-    refs = resolve_decision_refs(
+    refs, subject = resolve_decision_refs(
         store, request.tenant_id, request.application_id, request.subject
     )
     enforce_tenant_scope_binding(principal, refs.tenant_id)
-    if refs.deny_reason is not None:
+    if not refs.complete:
         # Unknown reference: same answer as for an inactive tenant/user/agent.
         return EffectivePermissionsResponseSchema(
             tenant_id=refs.tenant_id,
             application_id=refs.application_id,
-            subject=refs.subject,
+            subject=subject,
             permissions=[],
         )
     delegation = apply_delegation(
         token=x_delegation_token,
         tenant_id=refs.tenant_id,
         application_id=refs.application_id,
-        subject=refs.subject,
+        subject=subject,
         delegations=delegations,
         settings=settings,
     )
@@ -269,6 +278,7 @@ def effective_permissions(
         application_id=refs.application_id,
         subject=_to_subject(delegation.subject),
         delegated_permissions=delegation.permissions,
+        references=refs,
     )
     return EffectivePermissionsResponseSchema(
         tenant_id=refs.tenant_id,

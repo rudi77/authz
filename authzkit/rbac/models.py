@@ -31,6 +31,12 @@ class Permission:
     deprecated: bool = False  # deprecated permissions count in no decision
     critical: bool = False
 
+    @property
+    def active(self) -> bool:
+        """Not deprecated: may be assigned and counts in decisions. The SQL
+        store uses the same predicate as ``orm.Permission.active``."""
+        return not self.deprecated
+
     @classmethod
     def from_name(
         cls,

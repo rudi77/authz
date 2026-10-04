@@ -9,6 +9,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     Column,
+    ColumnElement,
     DateTime,
     ForeignKey,
     Index,
@@ -19,6 +20,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -195,6 +197,16 @@ class Permission(Base):
         Boolean, nullable=False, default=False, server_default=text("false")
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
+
+    @hybrid_property
+    def active(self) -> bool:
+        """Not deprecated: assignable and counted in decisions (see ``rbac.models.Permission``)."""
+        return not self.deprecated
+
+    @active.inplace.expression
+    @classmethod
+    def _active_expression(cls) -> ColumnElement[bool]:
+        return cls.deprecated.is_(False)
 
     __table_args__ = (
         UniqueConstraint("application_id", "name"),

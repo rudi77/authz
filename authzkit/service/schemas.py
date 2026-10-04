@@ -14,6 +14,15 @@ class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+def one_form(a: object, b: object, names: str, *, required: bool = False) -> None:
+    """At most one (``required``: exactly one) of two alternative fields,
+    e.g. ``user_id`` / ``user_ref``. Raise from a model validator (→ 422)."""
+    if a is not None and b is not None:
+        raise ValueError(f"give {names}, not both")
+    if required and a is None and b is None:
+        raise ValueError(f"give {names}")
+
+
 class UserRefSchema(_Base):
     """A user by identity at its IdP instead of the authz user id."""
 
@@ -36,10 +45,8 @@ class SubjectSchema(_Base):
 
     @model_validator(mode="after")
     def _one_form_per_reference(self) -> SubjectSchema:
-        if self.user_id is not None and self.user_ref is not None:
-            raise ValueError("give user_id or user_ref, not both")
-        if self.agent_id is not None and self.agent_name is not None:
-            raise ValueError("give agent_id or agent_name, not both")
+        one_form(self.user_id, self.user_ref, "user_id or user_ref")
+        one_form(self.agent_id, self.agent_name, "agent_id or agent_name")
         return self
 
 

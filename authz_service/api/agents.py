@@ -111,17 +111,8 @@ def list_agents(
 def set_agent_roles(
     agent_id: str,
     body: AgentRolesIn,
-    agent: Annotated[Agent, Depends(managed_agent)],
+    _: Annotated[Agent, Depends(managed_agent)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
-    found = store.find_assignable_roles(
-        tenant_id=agent.tenant_id, application_id=agent.application_id, names=body.roles
-    )
-    unknown = sorted(set(body.roles) - set(found))
-    if unknown:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail={"error": "unknown_role", "roles": unknown},
-        )
     store.set_agent_roles(agent_id, set(body.roles))
     return {"agent_id": agent_id, "roles": sorted(body.roles)}

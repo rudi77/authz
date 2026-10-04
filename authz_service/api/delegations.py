@@ -54,17 +54,12 @@ from authzkit.security.delegations import (
 )
 from authzkit.security.principal import Principal, principal_subject_label
 from authzkit.security.signing_keys import SigningKeyError, SigningKeyService
-from authzkit.service.schemas import SubjectSchema, UserRefSchema
+from authzkit.service.schemas import SubjectSchema, UserRefSchema, one_form
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 _log = logging.getLogger("authz.delegations")
 
 router = APIRouter(prefix="/v1/delegations", tags=["delegations"])
-
-
-def _at_most_one(a: object, b: object, names: str) -> None:
-    if a is not None and b is not None:
-        raise ValueError(f"give {names}, not both")
 
 
 class DelegationIn(BaseModel):
@@ -88,10 +83,8 @@ class DelegationIn(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_form(self) -> DelegationIn:
-        if (self.user_id is None) == (self.user_ref is None):
-            raise ValueError("give exactly one of user_id, user_ref")
-        if (self.agent_id is None) == (self.agent_name is None):
-            raise ValueError("give exactly one of agent_id, agent_name")
+        one_form(self.user_id, self.user_ref, "user_id or user_ref", required=True)
+        one_form(self.agent_id, self.agent_name, "agent_id or agent_name", required=True)
         return self
 
 
@@ -129,8 +122,8 @@ class RevokeIn(BaseModel):
 
     @model_validator(mode="after")
     def _one_form_per_reference(self) -> RevokeIn:
-        _at_most_one(self.user_id, self.user_ref, "user_id or user_ref")
-        _at_most_one(self.agent_id, self.agent_name, "agent_id or agent_name")
+        one_form(self.user_id, self.user_ref, "user_id or user_ref")
+        one_form(self.agent_id, self.agent_name, "agent_id or agent_name")
         if self.agent_name is not None and self.application_id is None:
             raise ValueError("agent_name needs application_id")
         return self
@@ -175,15 +168,14 @@ def create_delegation(
     tenant_id = require_tenant(store, body.tenant_id).id
     application_id = require_application(store, body.application_id).id
     user_id = body.user_id if body.user_ref is None else require_user_id(store, body.user_ref)
-    if body.agent_name is not None:
-        agent_id = require_agent_id(store, tenant_id, application_id, body.agent_name)
-    else:
-        assert body.agent_id is not None
-        agent_id = body.agent_id
-    assert user_id is not None
+    agent_id = (
+        body.agent_id
+        if body.agent_name is None
+        else require_agent_id(store, tenant_id, application_id, body.agent_name)
+    )
     enforce_tenant_scope_binding(principal, tenant_id)
 
-    if store.get_agent(
+    if agent_id is None or store.get_agent(
         tenant_id=tenant_id, application_id=application_id, agent_id=agent_id
     ) is None:
         raise HTTPException(status_code=404, detail={"reason": "agent_not_found"})
@@ -270,40 +262,44 @@ def list_delegations(
     ``user_provider`` + ``user_issuer`` + ``user_subject``, the agent as
     ``agent_name`` (with ``tenant_id`` and ``application_id``). A reference
     that matches nobody yields an empty list."""
-    ref_parts = (user_provider, user_issuer, user_subject)
-    if any(p is not None for p in ref_parts) and (
-        user_id is not None or any(p is None for p in ref_parts)
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "invalid_user_ref", "hint": "user_id or all of user_provider, "
-                    "user_issuer, user_subject"},
-        )
-    if agent_name is not None and (
-        agent_id is not None or tenant_id is None or application_id is None
-    ):
-        raise HTTPException(
-            status_code=422,
-            detail={"error": "invalid_agent_ref", "hint": "agent_name needs tenant_id and "
-                    "application_id, and excludes agent_id"},
-        )
-    resolved_tenant = require_tenant(store, tenant_id).id if tenant_id else None
-    if user_provider is not None and user_issuer is not None and user_subject is not None:
-        user_id = find_user_id(
-            store, UserRefSchema(provider=user_provider, issuer=user_issuer, subject=user_subject)
-        )
+    user_ref: UserRefSchema | None = None
+    if user_provider is not None or user_issuer is not None or user_subject is not None:
+        if (
+            user_id is not None
+            or user_provider is None
+            or user_issuer is None
+            or user_subject is None
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_user_ref", "hint": "user_id or all of user_provider, "
+                        "user_issuer, user_subject"},
+            )
+        user_ref = UserRefSchema(provider=user_provider, issuer=user_issuer, subject=user_subject)
+    agent_ref: tuple[str, str] | None = None  # (application id or slug, agent name)
+    if agent_name is not None:
+        if agent_id is not None or tenant_id is None or application_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"error": "invalid_agent_ref", "hint": "agent_name needs tenant_id and "
+                        "application_id, and excludes agent_id"},
+            )
+        agent_ref = (application_id, agent_name)
+    tenant = require_tenant(store, tenant_id) if tenant_id else None
+    if user_ref is not None:
+        user_id = find_user_id(store, user_ref)
         if user_id is None:
             return []
-    if agent_name is not None and resolved_tenant is not None and application_id is not None:
-        app = find_application(store, application_id)
-        agent_id = find_agent_id(store, resolved_tenant, app.id, agent_name) if app else None
+    if agent_ref is not None:
+        app = find_application(store, agent_ref[0])
+        agent_id = find_agent_id(store, tenant.id, app.id, agent_ref[1]) if app and tenant else None
         if agent_id is None:
             return []
     offset, limit = paginate_params(page, page_size)
     return [
         _out(g)
         for g in delegations.list(
-            tenant_id=resolved_tenant,
+            tenant_id=tenant.id if tenant else None,
             user_id=user_id,
             agent_id=agent_id,
             active_only=active_only,

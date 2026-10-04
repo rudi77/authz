@@ -30,6 +30,38 @@ class Subject:
 
 
 @dataclass(frozen=True)
+class ResolvedReferences:
+    """A decision's tenant / application / user / agent references, resolved
+    by the store (``SqlAlchemyStore.resolve_references``) in one session.
+
+    Passed to the engine, it replaces the engine's own reads of these rows.
+    An unknown reference keeps the raw value (tenant, application) or ``None``
+    (user, agent) and fails the engine's matching check, so the decision
+    carries the engine's usual deny reason.
+    """
+
+    tenant_id: str  # resolved id, or the reference itself when unknown
+    application_id: str
+    tenant_status: str | None  # None: unknown reference
+    application_status: str | None
+    user_id: str | None = None  # given, or resolved from a user reference
+    user_missing: bool = False  # a user reference matched nobody
+    agent_id: str | None = None  # given, or resolved from the agent name
+    agent_status: str | None = None  # set when resolved by name
+    agent_missing: bool = False  # an agent name matched nothing
+
+    @property
+    def complete(self) -> bool:
+        """Every reference matched a row."""
+        return (
+            self.tenant_status is not None
+            and self.application_status is not None
+            and not self.user_missing
+            and not self.agent_missing
+        )
+
+
+@dataclass(frozen=True)
 class AuthorizeRequest:
     tenant_id: str
     application_id: str
@@ -40,6 +72,7 @@ class AuthorizeRequest:
     # Permission subset from a verified delegation grant. ``None`` (default)
     # means no grant — the decision is exactly the pre-delegation behaviour.
     delegated_permissions: frozenset[str] | None = None
+    references: ResolvedReferences | None = None
 
 
 @dataclass(frozen=True)
@@ -50,6 +83,7 @@ class BulkAuthorizeRequest:
     checks: list[tuple[str, str]]  # [(resource, action), ...]
     context: dict[str, Any] = field(default_factory=dict)
     delegated_permissions: frozenset[str] | None = None
+    references: ResolvedReferences | None = None
 
 
 @dataclass(frozen=True)
@@ -87,10 +121,9 @@ class AuthorizationEngine:
     def authorize(self, request: AuthorizeRequest) -> AuthorizeDecision:
         required = f"{request.resource}.{request.action}"
 
-        if not self.repository.is_tenant_active(request.tenant_id):
-            return AuthorizeDecision.deny("tenant_not_active", required)
-        if not self.repository.is_application_active(request.application_id):
-            return AuthorizeDecision.deny("application_not_active", required)
+        inactive = self._inactive(request.tenant_id, request.application_id, request.references)
+        if inactive is not None:
+            return AuthorizeDecision.deny(inactive, required)
 
         if request.subject.type == SUBJECT_USER:
             permissions = self._resolve_user(request)
@@ -143,16 +176,9 @@ class AuthorizationEngine:
         """
         # Tenant + application activity: single check up front. If either is
         # inactive, every result is the same deny reason.
-        if not self.repository.is_tenant_active(request.tenant_id):
-            return [
-                AuthorizeDecision.deny("tenant_not_active", f"{r}.{a}")
-                for r, a in request.checks
-            ]
-        if not self.repository.is_application_active(request.application_id):
-            return [
-                AuthorizeDecision.deny("application_not_active", f"{r}.{a}")
-                for r, a in request.checks
-            ]
+        inactive = self._inactive(request.tenant_id, request.application_id, request.references)
+        if inactive is not None:
+            return [AuthorizeDecision.deny(inactive, f"{r}.{a}") for r, a in request.checks]
 
         # Resolve the subject's permission set once.
         subject_perms = self._subject_permissions_or_deny(request.subject, request)
@@ -220,6 +246,7 @@ class AuthorizationEngine:
             subject=subject,
             resource="_bulk",
             action="_marker",
+            references=request.references,
         )
         if subject.type == SUBJECT_USER:
             result = self._resolve_user(marker)
@@ -236,6 +263,7 @@ class AuthorizationEngine:
         application_id: str,
         subject: Subject,
         delegated_permissions: frozenset[str] | None = None,
+        references: ResolvedReferences | None = None,
     ) -> set[str]:
         """Return the set the subject can hit at this exact moment.
 
@@ -244,26 +272,27 @@ class AuthorizationEngine:
         depend on the resource attributes.
         """
         permissions = self._effective_permissions(
-            tenant_id=tenant_id, application_id=application_id, subject=subject
+            tenant_id=tenant_id, application_id=application_id, subject=subject, refs=references
         )
         if delegated_permissions is not None:
             return permissions & delegated_permissions
         return permissions
 
     def _effective_permissions(
-        self, *, tenant_id: str, application_id: str, subject: Subject
+        self,
+        *,
+        tenant_id: str,
+        application_id: str,
+        subject: Subject,
+        refs: ResolvedReferences | None = None,
     ) -> set[str]:
-        if not self.repository.is_tenant_active(tenant_id):
-            return set()
-        if not self.repository.is_application_active(application_id):
+        if self._inactive(tenant_id, application_id, refs) is not None:
             return set()
 
         if subject.type == SUBJECT_USER:
             if subject.user_id is None:
                 return set()
-            if not self.repository.is_user_membership_active(
-                tenant_id=tenant_id, application_id=application_id, user_id=subject.user_id
-            ):
+            if not self._membership_active(tenant_id, application_id, subject.user_id, refs):
                 return set()
             permissions = self.repository.resolve_user_permissions(
                 tenant_id=tenant_id, application_id=application_id, user_id=subject.user_id
@@ -271,13 +300,9 @@ class AuthorizationEngine:
         elif subject.type == SUBJECT_AGENT:
             if subject.user_id is None or subject.agent_id is None:
                 return set()
-            if not self.repository.is_user_membership_active(
-                tenant_id=tenant_id, application_id=application_id, user_id=subject.user_id
-            ):
+            if not self._membership_active(tenant_id, application_id, subject.user_id, refs):
                 return set()
-            if not self.repository.is_agent_active(
-                tenant_id=tenant_id, application_id=application_id, agent_id=subject.agent_id
-            ):
+            if not self._agent_active(tenant_id, application_id, subject.agent_id, refs):
                 return set()
             user_perms = self.repository.resolve_user_permissions(
                 tenant_id=tenant_id, application_id=application_id, user_id=subject.user_id
@@ -298,47 +323,86 @@ class AuthorizationEngine:
 
     # ---- internal branches ---------------------------------------------------
 
+    def _inactive(
+        self, tenant_id: str, application_id: str, refs: ResolvedReferences | None
+    ) -> str | None:
+        """Deny reason for an inactive (or unknown) tenant / application."""
+        if refs is None:
+            if not self.repository.is_tenant_active(tenant_id):
+                return "tenant_not_active"
+            if not self.repository.is_application_active(application_id):
+                return "application_not_active"
+            return None
+        if refs.tenant_status != "active":
+            return "tenant_not_active"
+        if refs.application_status != "active":
+            return "application_not_active"
+        return None
+
+    def _membership_active(
+        self, tenant_id: str, application_id: str, user_id: str, refs: ResolvedReferences | None
+    ) -> bool:
+        if refs is not None and refs.user_missing:
+            return False  # user_id was filled in from a delegation grant
+        return self.repository.is_user_membership_active(
+            tenant_id=tenant_id, application_id=application_id, user_id=user_id
+        )
+
+    def _agent_active(
+        self, tenant_id: str, application_id: str, agent_id: str, refs: ResolvedReferences | None
+    ) -> bool:
+        if refs is not None and refs.agent_missing:
+            return False  # agent_id was filled in from a delegation grant
+        if refs is not None and refs.agent_status is not None and agent_id == refs.agent_id:
+            return refs.agent_status == "active"  # read while resolving the name
+        return self.repository.is_agent_active(
+            tenant_id=tenant_id, application_id=application_id, agent_id=agent_id
+        )
+
     def _resolve_user(self, request: AuthorizeRequest) -> set[str] | AuthorizeDecision:
         required = f"{request.resource}.{request.action}"
-        if request.subject.user_id is None:
+        refs = request.references
+        user_id = request.subject.user_id
+        if user_id is None and not (refs is not None and refs.user_missing):
             return AuthorizeDecision.deny("invalid_subject", required)
-        if not self.repository.is_user_membership_active(
-            tenant_id=request.tenant_id,
-            application_id=request.application_id,
-            user_id=request.subject.user_id,
+        if user_id is None or not self._membership_active(
+            request.tenant_id, request.application_id, user_id, refs
         ):
             return AuthorizeDecision.deny("no_active_membership", required)
+        if refs is not None and refs.agent_missing:
+            return AuthorizeDecision.deny("agent_not_active", required)
         return self.repository.resolve_user_permissions(
             tenant_id=request.tenant_id,
             application_id=request.application_id,
-            user_id=request.subject.user_id,
+            user_id=user_id,
         )
 
     def _resolve_agent(self, request: AuthorizeRequest) -> set[str] | AuthorizeDecision:
         required = f"{request.resource}.{request.action}"
-        if request.subject.user_id is None or request.subject.agent_id is None:
+        refs = request.references
+        user_id, agent_id = request.subject.user_id, request.subject.agent_id
+        # A reference that matched nothing still names the user / agent.
+        if (user_id is None and not (refs is not None and refs.user_missing)) or (
+            agent_id is None and not (refs is not None and refs.agent_missing)
+        ):
             return AuthorizeDecision.deny("invalid_subject", required)
-        if not self.repository.is_user_membership_active(
-            tenant_id=request.tenant_id,
-            application_id=request.application_id,
-            user_id=request.subject.user_id,
+        if user_id is None or not self._membership_active(
+            request.tenant_id, request.application_id, user_id, refs
         ):
             return AuthorizeDecision.deny("no_active_user_membership", required)
-        if not self.repository.is_agent_active(
-            tenant_id=request.tenant_id,
-            application_id=request.application_id,
-            agent_id=request.subject.agent_id,
+        if agent_id is None or not self._agent_active(
+            request.tenant_id, request.application_id, agent_id, refs
         ):
             return AuthorizeDecision.deny("agent_not_active", required)
         user_perms = self.repository.resolve_user_permissions(
             tenant_id=request.tenant_id,
             application_id=request.application_id,
-            user_id=request.subject.user_id,
+            user_id=user_id,
         )
         agent_perms = self.repository.resolve_agent_permissions(
             tenant_id=request.tenant_id,
             application_id=request.application_id,
-            agent_id=request.subject.agent_id,
+            agent_id=agent_id,
         )
         # An agent never gets more than the user (spec section 2.5).
         return user_perms & agent_perms

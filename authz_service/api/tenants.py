@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from authz_service.dependencies import get_store, require_admin
+from authz_service.references import require_application, require_tenant
 from authzkit.storage import orm
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
@@ -41,20 +42,6 @@ class TenantMappingIn(BaseModel):
 
 class PermissionMaskIn(BaseModel):
     permissions: list[str]
-
-
-def _resolve_tenant(tenant_id: str, store: SqlAlchemyStore):
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
-    return tenant
-
-
-def _resolve_application(application_id: str, store: SqlAlchemyStore):
-    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
-    if app is None:
-        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-    return app
 
 
 class FeatureFlagIn(BaseModel):
@@ -98,9 +85,7 @@ def list_tenants(
 def get_tenant(
     tenant_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
 ) -> TenantOut:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    tenant = require_tenant(store, tenant_id)
     return TenantOut(id=tenant.id, slug=tenant.slug, name=tenant.name, status=tenant.status)
 
 
@@ -112,7 +97,7 @@ def update_tenant(
     body: TenantPatch,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> TenantOut:
-    tenant = _resolve_tenant(tenant_id, store)
+    tenant = require_tenant(store, tenant_id)
     with store.session() as s:
         row = s.get(orm.Tenant, tenant.id)
         if body.name is not None:
@@ -127,7 +112,7 @@ def update_tenant(
 def list_tenant_mappings(
     tenant_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
 ) -> list[dict]:
-    tenant = _resolve_tenant(tenant_id, store)
+    tenant = require_tenant(store, tenant_id)
     with store.session() as s:
         rows = s.scalars(
             select(orm.TenantIdentityMapping).where(
@@ -156,9 +141,7 @@ def create_tenant_mapping(
     body: TenantMappingIn,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    tenant = require_tenant(store, tenant_id)
     mapping = store.create_tenant_identity_mapping(
         tenant_id=tenant.id,
         provider=body.provider,
@@ -183,17 +166,10 @@ def set_feature_flag(
     body: FeatureFlagIn,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
-    tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    tenant = require_tenant(store, tenant_id)
     application_id = None
     if body.application_id:
-        app = store.get_application(body.application_id) or store.get_application_by_slug(
-            body.application_id
-        )
-        if app is None:
-            raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-        application_id = app.id
+        application_id = require_application(store, body.application_id).id
     store.set_tenant_feature_flag(tenant.id, application_id, body.key, body.value)
     return {"ok": True}
 
@@ -204,8 +180,8 @@ def list_feature_flags(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     application_id: str | None = None,
 ) -> dict:
-    tenant = _resolve_tenant(tenant_id, store)
-    app_id = _resolve_application(application_id, store).id if application_id else None
+    tenant = require_tenant(store, tenant_id)
+    app_id = require_application(store, application_id).id if application_id else None
     return {
         "tenant_id": tenant.id,
         "application_id": app_id,
@@ -223,8 +199,8 @@ def get_permission_mask(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
     """Tenant feature mask. Empty means "no mask" — every permission is allowed."""
-    tenant = _resolve_tenant(tenant_id, store)
-    app = _resolve_application(application_id, store)
+    tenant = require_tenant(store, tenant_id)
+    app = require_application(store, application_id)
     perms = store.resolve_tenant_permissions(tenant_id=tenant.id, application_id=app.id)
     return {"tenant_id": tenant.id, "application_id": app.id, "permissions": sorted(perms)}
 
@@ -239,8 +215,8 @@ def set_permission_mask(
     body: PermissionMaskIn,
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> dict:
-    tenant = _resolve_tenant(tenant_id, store)
-    app = _resolve_application(application_id, store)
+    tenant = require_tenant(store, tenant_id)
+    app = require_application(store, application_id)
     store.set_tenant_permission_mask(
         tenant_id=tenant.id, application_id=app.id, permissions=set(body.permissions)
     )
