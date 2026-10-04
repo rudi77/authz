@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from authz_service.dependencies import enforce_tenant_scope_binding
 from authzkit.provisioning import UserRef
 from authzkit.rbac.checker import ResolvedReferences
+from authzkit.security.principal import Principal
 from authzkit.service.schemas import SubjectSchema, UserRefSchema
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 from authzkit.tenancy.models import Application, Tenant
@@ -59,6 +61,21 @@ def resolve_decision_refs(
 
 def require_tenant(store: SqlAlchemyStore, ref: str) -> Tenant:
     tenant = find_tenant(store, ref)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
+    return tenant
+
+
+def require_bound_tenant(store: SqlAlchemyStore, ref: str, principal: Principal) -> Tenant:
+    """The tenant, after the caller's tenant scope binding.
+
+    The binding runs before the existence check (and before any user or agent
+    reference is resolved), so a caller bound to another tenant gets 403
+    whether or not the tenant exists — no existence probe across tenants.
+    An unknown reference never equals the caller's tenant id.
+    """
+    tenant = find_tenant(store, ref)
+    enforce_tenant_scope_binding(principal, tenant.id if tenant else ref)
     if tenant is None:
         raise HTTPException(status_code=404, detail={"reason": "tenant_not_found"})
     return tenant

@@ -41,6 +41,7 @@ from authz_service.references import (
     find_user_id,
     require_agent_id,
     require_application,
+    require_bound_tenant,
     require_tenant,
     require_user_id,
 )
@@ -165,7 +166,7 @@ def create_delegation(
     signing_keys: Annotated[SigningKeyService, Depends(get_signing_key_service)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> DelegationCreated:
-    tenant_id = require_tenant(store, body.tenant_id).id
+    tenant_id = require_bound_tenant(store, body.tenant_id, principal).id
     application_id = require_application(store, body.application_id).id
     user_id = body.user_id if body.user_ref is None else require_user_id(store, body.user_ref)
     agent_id = (
@@ -173,7 +174,6 @@ def create_delegation(
         if body.agent_name is None
         else require_agent_id(store, tenant_id, application_id, body.agent_name)
     )
-    enforce_tenant_scope_binding(principal, tenant_id)
 
     if agent_id is None or store.get_agent(
         tenant_id=tenant_id, application_id=application_id, agent_id=agent_id
@@ -324,8 +324,7 @@ def revoke_delegations(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     delegations: Annotated[DelegationService, Depends(get_delegation_service)],
 ) -> dict:
-    tenant_id = require_tenant(store, body.tenant_id).id
-    enforce_tenant_scope_binding(principal, tenant_id)
+    tenant_id = require_bound_tenant(store, body.tenant_id, principal).id
     user_id = body.user_id if body.user_ref is None else require_user_id(store, body.user_ref)
     agent_id = body.agent_id
     if body.agent_name is not None:

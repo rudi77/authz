@@ -19,12 +19,11 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from authz_service.dependencies import (
-    enforce_tenant_scope_binding,
     get_store,
     require_runtime,
 )
 from authz_service.management import Guard, catalog_application, manager_application
-from authz_service.references import require_application, require_tenant
+from authz_service.references import require_application, require_bound_tenant, require_tenant
 from authzkit.provisioning import (
     CatalogPermission,
     CatalogRole,
@@ -184,8 +183,7 @@ def list_tenant_roles(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
 ) -> list[TenantRoleOut]:
     app = require_application(store, app_slug)
-    tenant = require_tenant(store, tenant_slug)
-    enforce_tenant_scope_binding(principal, tenant.id)
+    tenant = require_bound_tenant(store, tenant_slug, principal)
     return [
         TenantRoleOut(**asdict(v))
         for v in store.list_tenant_roles(tenant_id=tenant.id, application_id=app.id)
