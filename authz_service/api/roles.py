@@ -7,8 +7,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
+from authz_service.management import enforce_managed_by
 from authzkit.rbac.models import RoleScope
+from authzkit.security.principal import Principal
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["roles"])
@@ -46,14 +49,16 @@ def _resolve_application(application_id: str, store: SqlAlchemyStore):
     "/applications/{application_id}/roles",
     response_model=RoleOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
 )
 def create_role(
     application_id: str,
     body: RoleIn,
+    principal: Annotated[Principal, Depends(require_admin)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> RoleOut:
     app = _resolve_application(application_id, store)
+    enforce_managed_by(app, principal, settings)
     try:
         scope = RoleScope(body.scope)
     except ValueError as exc:
@@ -101,18 +106,32 @@ def list_roles(
     ]
 
 
-@router.put(
-    "/roles/{role_id}/permissions",
-    dependencies=[Depends(require_admin)],
-)
+@router.put("/roles/{role_id}/permissions")
 def set_role_permissions(
     role_id: str,
     body: RolePermissionsIn,
+    principal: Annotated[Principal, Depends(require_admin)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict:
     role = store.get_role(role_id)
     if role is None:
         raise HTTPException(status_code=404, detail={"reason": "role_not_found"})
+    if role.application_id is not None:
+        app = store.get_application(role.application_id)
+        if app is not None:
+            enforce_managed_by(app, principal, settings)
+    known = {
+        p.name
+        for p in store.list_application_permissions(role.application_id)
+        if not p.deprecated
+    }
+    unknown = sorted(set(body.permissions) - known)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"error": "unknown_permission", "permissions": unknown},
+        )
     store.set_role_permissions(role_id, set(body.permissions))
     permissions = store.list_role_permissions(role_id)
     return {"role_id": role_id, "permissions": sorted(p.name for p in permissions)}

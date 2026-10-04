@@ -57,6 +57,10 @@ class Application(Base):
     slug: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    # The one caller (``client:<id>`` / ``apikey:<id>``) allowed to change this
+    # application's permissions, roles, memberships and agents. NULL = anyone
+    # with admin scope (unmanaged).
+    managed_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -142,6 +146,10 @@ class Role(Base):
     scope: Mapped[str] = mapped_column(String(32), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
     is_system: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Set on the internal role that carries a provisioned agent's permissions.
+    agent_id: Mapped[str | None] = mapped_column(
+        UUIDType, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
@@ -179,6 +187,13 @@ class Permission(Base):
     resource: Mapped[str] = mapped_column(String(255), nullable=False)
     action: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Deprecated permissions stay for history but count in no decision.
+    deprecated: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    critical: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
 
     __table_args__ = (
@@ -211,6 +226,7 @@ class Agent(Base):
         UUIDType, ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
+    display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     role_label: Mapped[str] = mapped_column(String(255), nullable=False, default="")
     created_by_user_id: Mapped[str | None] = mapped_column(
@@ -219,6 +235,16 @@ class Agent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
+    )
+
+    __table_args__ = (
+        Index(
+            "uq_agents_tenant_application_name",
+            "tenant_id",
+            "application_id",
+            "name",
+            unique=True,
+        ),
     )
 
 

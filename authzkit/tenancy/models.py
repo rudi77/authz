@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 TENANT_STATUS_ACTIVE = "active"
 TENANT_STATUS_SUSPENDED = "suspended"
 TENANT_STATUS_DELETED = "deleted"
+TENANT_STATUSES = frozenset(
+    {TENANT_STATUS_ACTIVE, TENANT_STATUS_SUSPENDED, TENANT_STATUS_DELETED}
+)
 
 USER_STATUS_ACTIVE = "active"
 USER_STATUS_DISABLED = "disabled"
@@ -15,6 +18,7 @@ MEMBERSHIP_STATUS_ACTIVE = "active"
 MEMBERSHIP_STATUS_INVITED = "invited"
 MEMBERSHIP_STATUS_SUSPENDED = "suspended"
 MEMBERSHIP_STATUS_REMOVED = "removed"
+MEMBERSHIP_STATUS_DISABLED = "disabled"  # set by declarative tenant state
 
 
 @dataclass(frozen=True)
@@ -35,6 +39,9 @@ class Application:
     slug: str
     name: str
     status: str = "active"
+    # Caller label (``client:<id>`` / ``apikey:<id>``) that alone may change
+    # this application's permissions, roles, memberships and agents.
+    managed_by: str | None = None
 
 
 @dataclass(frozen=True)

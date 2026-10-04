@@ -30,6 +30,7 @@ class Application:
     slug: str
     name: str
     status: str
+    managed_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,8 @@ class Permission:
     action: str
     application_id: str | None
     description: str | None
+    deprecated: bool = False
+    critical: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +74,7 @@ class Agent:
     name: str
     role: str
     status: str
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -325,12 +329,14 @@ class AuthzAdminClient:
         role: str = "",
         status: str = "active",
         created_by_user_id: str | None = None,
+        display_name: str | None = None,
     ) -> Agent:
         data = self._request(
             "POST",
             f"v1/tenants/{tenant_id}/applications/{application_id}/agents",
             json={
                 "name": name,
+                "display_name": display_name,
                 "role": role,
                 "status": status,
                 "created_by_user_id": created_by_user_id,

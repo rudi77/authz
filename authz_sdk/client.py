@@ -35,11 +35,28 @@ class AuthzServiceError(AuthzClientError):
 
 
 @dataclass(frozen=True)
+class UserRef:
+    """A user by IdP identity — an alternative to the authz ``user_id``."""
+
+    provider: str
+    issuer: str
+    subject: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {"provider": self.provider, "issuer": self.issuer, "subject": self.subject}
+
+
+@dataclass(frozen=True)
 class Subject:
+    """Who acts. ``user_ref`` / ``agent_name`` are alternatives to the ids;
+    the service resolves them (give one form per field)."""
+
     type: str  # "user" | "agent"
     user_id: str | None = None
     agent_id: str | None = None
     service_account_id: str | None = None
+    user_ref: UserRef | None = None
+    agent_name: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"type": self.type}
@@ -49,6 +66,10 @@ class Subject:
             out["agent_id"] = self.agent_id
         if self.service_account_id is not None:
             out["service_account_id"] = self.service_account_id
+        if self.user_ref is not None:
+            out["user_ref"] = self.user_ref.to_dict()
+        if self.agent_name is not None:
+            out["agent_name"] = self.agent_name
         return out
 
 
@@ -428,6 +449,7 @@ class AuthzClient:
             tenant_id,
             application_id,
             f"{subject.type}:{subject.user_id}:{subject.agent_id}:{subject.service_account_id}"
+            f":{subject.user_ref}:{subject.agent_name}"
             # A grant narrows the set, so it must partition the cache too.
             + (
                 f":d={hashlib.sha256(delegation_token.encode()).hexdigest()[:24]}"
@@ -459,23 +481,30 @@ class AuthzClient:
         *,
         tenant_id: str,
         application_id: str,
-        user_id: str,
-        agent_id: str,
+        user_id: str | None = None,
+        agent_id: str | None = None,
         permissions: list[str] | set[str] | None = None,
         ttl_seconds: int | None = None,
         purpose: str | None = None,
+        user_ref: UserRef | None = None,
+        agent_name: str | None = None,
     ) -> Delegation:
         """Issue a grant; hand ``result.token`` to the agent runtime.
 
-        ``permissions=None`` delegates everything the agent may currently do
-        for this user. A subset outside ``user ∩ agent`` is rejected (403).
+        Give the user as ``user_id`` or ``user_ref`` and the agent as
+        ``agent_id`` or ``agent_name``. ``permissions=None`` delegates
+        everything the agent may currently do for this user. A subset
+        outside ``user ∩ agent`` is rejected (403).
         """
-        body: dict[str, Any] = {
-            "tenant_id": tenant_id,
-            "application_id": application_id,
-            "user_id": user_id,
-            "agent_id": agent_id,
-        }
+        body: dict[str, Any] = {"tenant_id": tenant_id, "application_id": application_id}
+        if user_id is not None:
+            body["user_id"] = user_id
+        if user_ref is not None:
+            body["user_ref"] = user_ref.to_dict()
+        if agent_id is not None:
+            body["agent_id"] = agent_id
+        if agent_name is not None:
+            body["agent_name"] = agent_name
         if permissions is not None:
             body["permissions"] = sorted(permissions)
         if ttl_seconds is not None:
@@ -491,14 +520,30 @@ class AuthzClient:
         self._request("DELETE", f"v1/delegations/{delegation_id}")
 
     def revoke_delegations(
-        self, *, tenant_id: str, user_id: str | None = None, agent_id: str | None = None
+        self,
+        *,
+        tenant_id: str,
+        user_id: str | None = None,
+        agent_id: str | None = None,
+        user_ref: UserRef | None = None,
+        agent_name: str | None = None,
+        application_id: str | None = None,
     ) -> int:
-        """Kill switch: revoke every active grant of a tenant / user / agent."""
+        """Kill switch: revoke every active grant of a tenant / user / agent.
+
+        ``agent_name`` needs ``application_id``.
+        """
         body: dict[str, Any] = {"tenant_id": tenant_id}
         if user_id:
             body["user_id"] = user_id
         if agent_id:
             body["agent_id"] = agent_id
+        if user_ref is not None:
+            body["user_ref"] = user_ref.to_dict()
+        if agent_name is not None:
+            body["agent_name"] = agent_name
+        if application_id is not None:
+            body["application_id"] = application_id
         return int(self._post("v1/delegations/revoke", body)["revoked"])
 
     def introspect_delegation(self, token: str) -> dict[str, Any]:

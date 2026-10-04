@@ -28,6 +28,8 @@ class Permission:
     action: str
     application_id: str | None = None
     description: str | None = None
+    deprecated: bool = False  # deprecated permissions count in no decision
+    critical: bool = False
 
     @classmethod
     def from_name(
@@ -63,3 +65,5 @@ class Role:
     application_id: str | None = None
     description: str | None = None
     is_system: bool = False
+    # Set on the internal role carrying a provisioned agent's permissions.
+    agent_id: str | None = None

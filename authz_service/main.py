@@ -31,6 +31,7 @@ from authz_service.api.oauth import as_router as oauth_as_router
 from authz_service.api.oauth_clients import router as oauth_clients_router
 from authz_service.api.permissions import router as permissions_router
 from authz_service.api.policies import router as memberships_router
+from authz_service.api.provisioning import router as provisioning_router
 from authz_service.api.roles import router as roles_router
 from authz_service.api.tenants import router as tenants_router
 from authz_service.audit_retention import AuditRetentionWorker
@@ -201,6 +202,7 @@ def create_app() -> FastAPI:
     app.include_router(context_router)
     app.include_router(tenants_router)
     app.include_router(applications_router)
+    app.include_router(provisioning_router)
     app.include_router(memberships_router)
     app.include_router(roles_router)
     app.include_router(permissions_router)

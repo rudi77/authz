@@ -21,7 +21,9 @@ from authz_service.dependencies import (
     require_admin,
     require_caller,
 )
+from authz_service.management import enforce_managed_by
 from authzkit.security.invitations import InvitationError, InvitationService
+from authzkit.security.principal import Principal
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["invitations"])
@@ -71,13 +73,14 @@ class InvitationAccept(BaseModel):
     "/tenants/{tenant_id}/invitations",
     response_model=InvitationCreated,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
 )
 def create_invitation(
     tenant_id: str,
     body: InvitationIn,
+    principal: Annotated[Principal, Depends(require_admin)],
     invitations: Annotated[InvitationService, Depends(get_invitation_service)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> InvitationCreated:
     tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
     if tenant is None:
@@ -89,6 +92,7 @@ def create_invitation(
         )
         if app is None:
             raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+        enforce_managed_by(app, principal, settings)
         application_id = app.id
     token = invitations.create(
         tenant_id=tenant.id,

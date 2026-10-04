@@ -7,6 +7,7 @@ Used for unit tests, examples, and the Python SDK's offline mode. Implements
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
@@ -66,9 +67,11 @@ class InMemoryStore:
     # ---- Applications --------------------------------------------------------
 
     def create_application(
-        self, *, slug: str, name: str, status: str = "active"
+        self, *, slug: str, name: str, status: str = "active", managed_by: str | None = None
     ) -> Application:
-        app = Application(id=_new_id(), slug=slug, name=name, status=status)
+        app = Application(
+            id=_new_id(), slug=slug, name=name, status=status, managed_by=managed_by
+        )
         self.applications[app.id] = app
         return app
 
@@ -81,6 +84,11 @@ class InMemoryStore:
     def is_application_active(self, application_id: str) -> bool:
         a = self.applications.get(application_id)
         return a is not None and a.status == "active"
+
+    def set_application_managed_by(self, application_id: str, managed_by: str | None) -> None:
+        app = self.applications.get(application_id)
+        if app is not None:
+            self.applications[application_id] = replace(app, managed_by=managed_by)
 
     # ---- Users + identities --------------------------------------------------
 
@@ -183,12 +191,12 @@ class InMemoryStore:
             roles=frozenset(roles or set()),
         )
         self.memberships[membership.id] = membership
-        if roles:
-            role_ids = {self._role_id_by_name(application_id, name) for name in roles}
-            role_ids.discard(None)
-            self.membership_roles[membership.id] = {r for r in role_ids if r}
-        else:
-            self.membership_roles[membership.id] = set()
+        self.membership_roles[membership.id] = {
+            r.id
+            for r in self.find_assignable_roles(
+                tenant_id=tenant_id, application_id=application_id, names=roles or set()
+            ).values()
+        }
         return membership
 
     def get_membership(
@@ -208,12 +216,14 @@ class InMemoryStore:
 
     def set_membership_roles(self, membership_id: str, role_names: set[str]) -> None:
         membership = self.memberships[membership_id]
-        role_ids: set[str] = set()
-        for name in role_names:
-            rid = self._role_id_by_name(membership.application_id, name)
-            if rid is not None:
-                role_ids.add(rid)
-        self.membership_roles[membership_id] = role_ids
+        self.membership_roles[membership_id] = {
+            r.id
+            for r in self.find_assignable_roles(
+                tenant_id=membership.tenant_id,
+                application_id=membership.application_id,
+                names=role_names,
+            ).values()
+        }
         self.memberships[membership_id] = replace(membership, roles=frozenset(role_names))
 
     def is_user_membership_active(
@@ -264,11 +274,51 @@ class InMemoryStore:
                 return r
         return None
 
-    def _role_id_by_name(self, application_id: str | None, name: str) -> str | None:
+    def find_assignable_roles(
+        self, *, tenant_id: str, application_id: str | None, names: Iterable[str]
+    ) -> dict[str, Role]:
+        """Resolve role names tenant-first: this tenant's role, else the
+        application-wide one, never a role bound to another tenant.
+
+        Internal per-agent roles are not assignable by name.
+        """
+        wanted = set(names)
+        found: dict[str, Role] = {}
         for r in self.roles.values():
-            if r.name == name and r.application_id == application_id:
-                return r.id
-        return None
+            if (
+                r.name in wanted
+                and r.application_id == application_id
+                and r.agent_id is None
+                and r.tenant_id in (None, tenant_id)
+                and (r.tenant_id is not None or r.name not in found)
+            ):
+                found[r.name] = r
+        return found
+
+    def _effective_role_ids(self, tenant_id: str, role_ids: set[str]) -> set[str]:
+        """A tenant role named like a linked application-wide role overrides
+        it; links to another tenant's role grant nothing."""
+        effective: set[str] = set()
+        for rid in role_ids:
+            role = self.roles.get(rid)
+            if role is None or role.tenant_id not in (None, tenant_id):
+                continue
+            if role.tenant_id is None and role.agent_id is None:
+                override = next(
+                    (
+                        o
+                        for o in self.roles.values()
+                        if o.tenant_id == tenant_id
+                        and o.agent_id is None
+                        and o.application_id == role.application_id
+                        and o.name == role.name
+                    ),
+                    None,
+                )
+                if override is not None:
+                    role = override
+            effective.add(role.id)
+        return effective
 
     def create_permission(
         self,
@@ -281,7 +331,7 @@ class InMemoryStore:
         self.permissions[permission.id] = permission
         return permission
 
-    def list_application_permissions(self, application_id: str) -> list[Permission]:
+    def list_application_permissions(self, application_id: str | None) -> list[Permission]:
         return [p for p in self.permissions.values() if p.application_id == application_id]
 
     def list_role_permissions(self, role_id: str) -> list[Permission]:
@@ -313,9 +363,10 @@ class InMemoryStore:
         ]
         permissions: set[str] = set()
         for m in candidates:
-            for role_id in self.membership_roles.get(m.id, set()):
+            linked = self.membership_roles.get(m.id, set())
+            for role_id in self._effective_role_ids(tenant_id, linked):
                 for p in self.list_role_permissions(role_id):
-                    if p.application_id in (application_id, None):
+                    if p.application_id in (application_id, None) and not p.deprecated:
                         permissions.add(p.name)
         return permissions
 
@@ -326,9 +377,10 @@ class InMemoryStore:
         if agent is None or agent.tenant_id != tenant_id or agent.application_id != application_id:
             return set()
         permissions: set[str] = set()
-        for role_id in self.agent_roles.get(agent_id, set()):
+        for role_id in self._effective_role_ids(tenant_id, self.agent_roles.get(agent_id, set())):
             for p in self.list_role_permissions(role_id):
-                permissions.add(p.name)
+                if not p.deprecated:
+                    permissions.add(p.name)
         return permissions
 
     def resolve_tenant_permissions(
@@ -363,6 +415,7 @@ class InMemoryStore:
         role: str = "",
         status: str = "active",
         created_by_user_id: str | None = None,
+        display_name: str | None = None,
     ) -> Agent:
         agent = Agent(
             id=_new_id(),
@@ -372,6 +425,7 @@ class InMemoryStore:
             role=role,
             status=status,
             created_by_user_id=created_by_user_id,
+            display_name=display_name,
         )
         self.agents[agent.id] = agent
         self.agent_roles.setdefault(agent.id, set())
@@ -387,6 +441,23 @@ class InMemoryStore:
             return None
         return agent
 
+    def get_agent_by_id(self, agent_id: str) -> Agent | None:
+        return self.agents.get(agent_id)
+
+    def find_agent_by_name(
+        self, *, tenant_id: str, application_id: str, name: str
+    ) -> Agent | None:
+        return next(
+            (
+                a
+                for a in self.agents.values()
+                if a.tenant_id == tenant_id
+                and a.application_id == application_id
+                and a.name == name
+            ),
+            None,
+        )
+
     def is_agent_active(
         self, *, tenant_id: str, application_id: str, agent_id: str
     ) -> bool:
@@ -397,9 +468,9 @@ class InMemoryStore:
 
     def set_agent_roles(self, agent_id: str, role_names: set[str]) -> None:
         agent = self.agents[agent_id]
-        role_ids: set[str] = set()
-        for name in role_names:
-            rid = self._role_id_by_name(agent.application_id, name)
-            if rid is not None:
-                role_ids.add(rid)
-        self.agent_roles[agent_id] = role_ids
+        self.agent_roles[agent_id] = {
+            r.id
+            for r in self.find_assignable_roles(
+                tenant_id=agent.tenant_id, application_id=agent.application_id, names=role_names
+            ).values()
+        }

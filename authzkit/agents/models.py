@@ -20,6 +20,7 @@ class Agent:
     role: str = ""  # primary role label; full role list lives in agent_roles
     status: str = AGENT_STATUS_ACTIVE
     created_by_user_id: str | None = None
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)

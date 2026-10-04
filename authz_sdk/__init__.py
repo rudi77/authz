@@ -25,6 +25,7 @@ from authz_sdk.client import (
     Delegation,
     ResolvedContext,
     Subject,
+    UserRef,
 )
 from authzkit.agents.guard import AgentGuard
 from authzkit.exceptions import PermissionDeniedError
@@ -54,4 +55,5 @@ __all__ = [
     "Subject",
     "Tenant",
     "ToolGuard",
+    "UserRef",
 ]

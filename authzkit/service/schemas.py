@@ -7,18 +7,40 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class _Base(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+class UserRefSchema(_Base):
+    """A user by identity at its IdP instead of the authz user id."""
+
+    provider: str = Field(min_length=1)
+    issuer: str = Field(min_length=1)
+    subject: str = Field(min_length=1)
+
+
 class SubjectSchema(_Base):
     type: str = Field(description="user | agent | service_account | api_key")
     user_id: str | None = None
+    user_ref: UserRefSchema | None = Field(
+        default=None, description="Alternative to user_id: the user's IdP identity"
+    )
     agent_id: str | None = None
+    agent_name: str | None = Field(
+        default=None, description="Alternative to agent_id: the agent's name in the tenant"
+    )
     service_account_id: str | None = None
+
+    @model_validator(mode="after")
+    def _one_form_per_reference(self) -> SubjectSchema:
+        if self.user_id is not None and self.user_ref is not None:
+            raise ValueError("give user_id or user_ref, not both")
+        if self.agent_id is not None and self.agent_name is not None:
+            raise ValueError("give agent_id or agent_name, not both")
+        return self
 
 
 # ---- /v1/resolve-context ----------------------------------------------------

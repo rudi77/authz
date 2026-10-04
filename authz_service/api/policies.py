@@ -11,7 +11,10 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
+from authz_service.management import enforce_managed_by
+from authzkit.security.principal import Principal
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
 
 router = APIRouter(prefix="/v1", tags=["memberships"])
@@ -42,12 +45,13 @@ class MembershipPatch(BaseModel):
     "/tenants/{tenant_id}/memberships",
     response_model=MembershipOut,
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_admin)],
 )
 def create_membership(
     tenant_id: str,
     body: MembershipIn,
+    principal: Annotated[Principal, Depends(require_admin)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> MembershipOut:
     tenant = store.get_tenant(tenant_id) or store.get_tenant_by_slug(tenant_id)
     if tenant is None:
@@ -59,6 +63,7 @@ def create_membership(
         )
         if app is None:
             raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+        enforce_managed_by(app, principal, settings)
         application_id = app.id
     membership = store.create_membership(
         tenant_id=tenant.id,
@@ -125,12 +130,13 @@ def list_memberships(
 @router.patch(
     "/memberships/{membership_id}",
     response_model=MembershipOut,
-    dependencies=[Depends(require_admin)],
 )
 def update_membership(
     membership_id: str,
     body: MembershipPatch,
+    principal: Annotated[Principal, Depends(require_admin)],
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
 ) -> MembershipOut:
 
     from authzkit.storage import orm
@@ -139,6 +145,9 @@ def update_membership(
         row = s.get(orm.Membership, membership_id)
         if row is None:
             raise HTTPException(status_code=404, detail={"reason": "membership_not_found"})
+        app = store.get_application(row.application_id) if row.application_id else None
+        if app is not None:
+            enforce_managed_by(app, principal, settings)
         if body.status is not None:
             row.status = body.status
         s.commit()

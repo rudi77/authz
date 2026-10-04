@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from authz_service.config import Settings, get_settings
 from authz_service.dependencies import get_store, require_admin
+from authz_service.management import caller_label
+from authzkit.audit.logger import AuditEntry
+from authzkit.security.principal import Principal
 from authzkit.storage import orm
 from authzkit.storage.sqlalchemy import SqlAlchemyStore
+
+_log = logging.getLogger("authz.applications")
 
 router = APIRouter(prefix="/v1/applications", tags=["applications"])
 
@@ -22,10 +29,14 @@ class ApplicationIn(BaseModel):
 
 
 class ApplicationOut(BaseModel):
+    """Routes serve this with ``response_model_exclude_defaults`` so a null
+    ``managed_by`` is omitted and older SDKs (strict dataclasses) keep working."""
+
     id: str
     slug: str
     name: str
     status: str
+    managed_by: str | None = None
 
 
 class ApplicationPatch(BaseModel):
@@ -36,6 +47,7 @@ class ApplicationPatch(BaseModel):
 @router.post(
     "",
     response_model=ApplicationOut,
+    response_model_exclude_defaults=True,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_admin)],
 )
@@ -46,7 +58,12 @@ def create_application(
     return ApplicationOut(id=app.id, slug=app.slug, name=app.name, status=app.status)
 
 
-@router.get("", response_model=list[ApplicationOut], dependencies=[Depends(require_admin)])
+@router.get(
+    "",
+    response_model=list[ApplicationOut],
+    response_model_exclude_defaults=True,
+    dependencies=[Depends(require_admin)],
+)
 def list_applications(
     store: Annotated[SqlAlchemyStore, Depends(get_store)],
     page: int = 1,
@@ -60,12 +77,18 @@ def list_applications(
             select(orm.Application).order_by(orm.Application.slug).offset(offset).limit(limit)
         ).all()
         return [
-            ApplicationOut(id=r.id, slug=r.slug, name=r.name, status=r.status) for r in rows
+            ApplicationOut(
+                id=r.id, slug=r.slug, name=r.name, status=r.status, managed_by=r.managed_by
+            )
+            for r in rows
         ]
 
 
 @router.get(
-    "/{application_id}", response_model=ApplicationOut, dependencies=[Depends(require_admin)]
+    "/{application_id}",
+    response_model=ApplicationOut,
+    response_model_exclude_defaults=True,
+    dependencies=[Depends(require_admin)],
 )
 def get_application(
     application_id: str, store: Annotated[SqlAlchemyStore, Depends(get_store)]
@@ -73,11 +96,16 @@ def get_application(
     app = store.get_application(application_id) or store.get_application_by_slug(application_id)
     if app is None:
         raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
-    return ApplicationOut(id=app.id, slug=app.slug, name=app.name, status=app.status)
+    return ApplicationOut(
+        id=app.id, slug=app.slug, name=app.name, status=app.status, managed_by=app.managed_by
+    )
 
 
 @router.patch(
-    "/{application_id}", response_model=ApplicationOut, dependencies=[Depends(require_admin)]
+    "/{application_id}",
+    response_model=ApplicationOut,
+    response_model_exclude_defaults=True,
+    dependencies=[Depends(require_admin)],
 )
 def update_application(
     application_id: str,
@@ -94,4 +122,39 @@ def update_application(
         if body.status is not None:
             row.status = body.status
         s.commit()
-        return ApplicationOut(id=row.id, slug=row.slug, name=row.name, status=row.status)
+        return ApplicationOut(
+            id=row.id, slug=row.slug, name=row.name, status=row.status, managed_by=app.managed_by
+        )
+
+
+@router.post("/{application_id}/release-management", response_model=ApplicationOut)
+def release_management(
+    application_id: str,
+    principal: Annotated[Principal, Depends(require_admin)],
+    store: Annotated[SqlAlchemyStore, Depends(get_store)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> ApplicationOut:
+    """Emergency exit: drop ``managed_by`` so platform admins can write again."""
+    app = store.get_application(application_id) or store.get_application_by_slug(application_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail={"reason": "application_not_found"})
+    released_by = caller_label(principal, settings)
+    store.set_application_managed_by(app.id, None)
+    store.write_audit(
+        AuditEntry(
+            decision="admin",
+            reason="management_released",
+            resource="application.management",
+            action="release",
+            application_id=app.id,
+            request={"managed_by": app.managed_by, "released_by": released_by},
+            response={"managed_by": None},
+        )
+    )
+    _log.warning(
+        "management of application %s released by %s (was %s)",
+        app.slug,
+        released_by,
+        app.managed_by,
+    )
+    return ApplicationOut(id=app.id, slug=app.slug, name=app.name, status=app.status)
