@@ -1,5 +1,64 @@
 # Changelog
 
+## Unreleased — Managed applications and declarative provisioning
+
+### New
+
+- **References** on `/v1/authorize`, `/v1/bulk-authorize`,
+  `/v1/effective-permissions`, `POST /v1/delegations`,
+  `POST /v1/delegations/revoke` and the `GET /v1/delegations` filters: tenant
+  and application by id or slug, `user_ref {provider, issuer, subject}`
+  instead of `user_id`, `agent_name` instead of `agent_id`. Both forms of one
+  field → 422. Unknown references deny (`tenant_not_active`,
+  `application_not_active`, `no_active_membership` /
+  `no_active_user_membership`, `agent_not_active`) or 404 when issuing grants
+  (`tenant_not_found`, `application_not_found`, `user_not_found`,
+  `agent_not_found`). Revoke/list by `agent_name` need `application_id`.
+- `PUT /v1/applications/{app}/catalog`: complete permission list (unlisted
+  permissions become `deprecated` and count in no decision) and default
+  roles (permissions replaced). Creates the application; the caller becomes
+  its `managed_by`.
+- `managed_by` on applications: writes to permissions, roles, memberships,
+  agents and invitations of a managed application by anyone else →
+  `403 application_managed_externally`. `POST
+  /v1/applications/{app}/release-management` clears it (audited). The admin
+  UI shows managed applications read-only.
+- `PUT /v1/applications/{app}/tenants/{tenant}/state`: tenant, users,
+  memberships and agents of one tenant in one transaction; unlisted
+  memberships/agents become `disabled`; agent permissions live on an
+  internal per-agent role. Invalid input → 422 `invalid_state` with every
+  error, nothing applied.
+- Tenant role overrides: `GET|PUT|DELETE
+  /v1/applications/{app}/tenants/{tenant}/roles[/{name}]`.
+- Contract-test fixture: `contract/docker-compose.contract.yml` (see
+  `contract/README.md`).
+- Python SDK: `UserRef`, `Subject.user_ref` / `agent_name`, reference
+  arguments on `create_delegation` / `revoke_delegations`, optional
+  `managed_by` / `deprecated` / `critical` / `display_name` fields.
+
+### Fixed
+
+- **Tenant isolation:** `create_membership`, `set_membership_roles` and
+  `set_agent_roles` (SQL and in-memory store) selected roles by
+  `(application, name)` only and could attach a tenant-bound role of
+  *another* tenant. Names now resolve tenant-first (this tenant's role, else
+  the application role); a tenant role overrides the application role of the
+  same name in permission resolution.
+- `PUT /v1/agents/{id}/roles` returned 200 for an unknown agent and dropped
+  unknown role names; now 404 `agent_not_found` / 422 `unknown_role`.
+  `PUT /v1/roles/{id}/permissions` dropped unknown names; now 422
+  `unknown_permission`. Nothing is applied on error.
+
+### Changed
+
+- Migration `0005`: `applications.managed_by`, `permissions.deprecated` /
+  `critical`, `roles.agent_id`, `agents.display_name` and a unique index on
+  agents `(tenant_id, application_id, name)` — the upgrade fails if such
+  duplicates exist; creating a duplicate now returns 409 `agent_name_taken`.
+- New response fields are omitted at their default (`managed_by` null,
+  `deprecated`/`critical` false, `display_name` null) so released Python SDKs,
+  which build strict dataclasses, keep working.
+
 ## Unreleased — Admin console redesign
 
 - Rebuilt `/admin` as a proper console: sign-in screen (SSO or API key)

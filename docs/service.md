@@ -26,6 +26,19 @@ service buys you operational features at the cost of a network hop.
 | POST | `/v1/bulk-authorize` | Many allow/deny in one request |
 | POST | `/v1/effective-permissions` | Preload set for a session |
 
+Tenant/application accept id or slug; subjects accept `user_ref`
+(`provider`, `issuer`, `subject`) and `agent_name` instead of the ids.
+
+### Declarative provisioning (managed applications)
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| PUT | `/v1/applications/{app}/catalog` | Permissions + default roles; creates the app, caller becomes `managed_by` |
+| PUT | `/v1/applications/{app}/tenants/{tenant}/state` | Members + agents of one tenant (manager only, atomic) |
+| GET | `/v1/applications/{app}/tenants/{tenant}/roles` | Default roles with tenant overrides |
+| PUT/DELETE | `/v1/applications/{app}/tenants/{tenant}/roles/{name}` | Set / remove a tenant override (manager only) |
+| POST | `/v1/applications/{app}/release-management` | Clear `managed_by` (admin, audited) |
+
 ### Tenants & applications
 
 | Method | Path | Purpose |

@@ -224,6 +224,25 @@ Runtime (PEPs hit these from every request):
 - `POST /v1/bulk-authorize` — many decisions in one round-trip
 - `POST /v1/effective-permissions` — preload set for a session/agent run
 
+The decision and delegation endpoints accept references instead of authz
+ids: tenant and application by id **or slug**, the user as
+`user_ref: {provider, issuer, subject}` instead of `user_id`, the agent as
+`agent_name` instead of `agent_id` (one form per field). Unknown references
+deny like inactive ones; responses carry the resolved ids.
+
+Declarative provisioning (for an application owned by one client, see
+"Managed applications" below):
+
+- `PUT /v1/applications/{app}/catalog` — complete permission list + default
+  roles; creates the application and makes the caller its manager
+- `PUT /v1/applications/{app}/tenants/{tenant}/state` — complete members and
+  agents of one tenant; atomic, 422 with an error list
+- `GET /v1/applications/{app}/tenants/{tenant}/roles`,
+  `PUT|DELETE /v1/applications/{app}/tenants/{tenant}/roles/{name}` — tenant
+  overrides of default roles
+- `POST /v1/applications/{app}/release-management` — operator's emergency
+  exit: clears `managed_by` (audited)
+
 Management (admin tools, used at provisioning time):
 
 - `POST /v1/tenants`, `GET /v1/tenants`, `GET|PATCH /v1/tenants/{id}`
@@ -246,6 +265,17 @@ Management (admin tools, used at provisioning time):
   `DELETE /v1/api-keys/{id}`
 - `POST /v1/tenants/{tid}/invitations`, `GET /v1/tenants/{tid}/invitations`,
   `DELETE /v1/invitations/{id}`, `POST /v1/invitations/{token}/accept`
+
+### Managed applications
+
+An application created through the catalog endpoint carries `managed_by`
+(`client:<client_id>` or `apikey:<id>`). Only that caller may then change its
+permissions, roles, memberships, agents or invitations — including through the
+routes above; everyone else gets `403 application_managed_externally`. Tenant
+masks, feature flags, credentials, signing keys and delegation revocation stay
+with the platform operator. The admin UI shows such applications read-only.
+Role names resolve tenant-first: a tenant role named like a default role
+overrides it for that tenant, and roles of other tenants are never assigned.
 
 All endpoints require the `X-API-Key` header (or `Authorization: Bearer <key>`).
 Two key sources are checked in order: env-configured bootstrap keys

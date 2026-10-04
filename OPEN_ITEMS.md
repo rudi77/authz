@@ -9,6 +9,25 @@ Status legend: 🟥 blocker for GA · 🟧 needed for first paying customer ·
 
 ---
 
+## Recently closed (2026-10 managed applications)
+
+| Item | What landed | Files |
+|---|---|---|
+| References instead of ids, declarative catalog + tenant state, `managed_by`, tenant role overrides, tenant-first role resolution, no silent success on role/permission assignment, contract fixture | see CHANGELOG "Managed applications and declarative provisioning" | `authz_service/api/provisioning.py`, `authz_service/references.py`, `authz_service/management.py`, `authzkit/storage/sqlalchemy.py`, `contract/` |
+
+Follow-ups (🟨):
+- Go / TypeScript SDKs lack `user_ref` / `agent_name`, the provisioning
+  endpoints and the new response fields (they ignore unknown fields, so
+  nothing breaks).
+- Python SDK has no wrappers for catalog / tenant state / tenant role
+  overrides yet.
+- The in-memory store implements tenant-first resolution and deprecation but
+  not the declarative provisioning methods (service-only, SQL store).
+- No way to re-claim management after `release-management` other than a new
+  application; `managed_by` can only be set at creation through the catalog.
+- 404 bodies keep the existing `{"detail": {"reason": …}}` shape; other new
+  errors use `{"detail": {"error": …}}`.
+
 ## Recently closed (2026-10 delegation grants)
 
 | Item | What landed | Files |

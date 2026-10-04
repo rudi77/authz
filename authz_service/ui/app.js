@@ -659,6 +659,17 @@ function needContext(kind, title, subtitle) {
   }));
 }
 
+/** Manager of the selected application, if it is managed through the
+ * provisioning API. Its permissions, roles, memberships and agents are then
+ * read-only here — the service rejects writes from anyone else. */
+const managedBy = () => appById(state.appId)?.managed_by || null;
+function managedNotice() {
+  const by = managedBy();
+  return by && el("div", { class: "callout info" }, icon("info"),
+    el("div", {}, "Managed by ", el("code", { class: "code-inline" }, by),
+      " — read-only here. Changes come from the managing application."));
+}
+
 /** Run an action, toast errors, re-render on success. */
 const action = (fn) => async () => {
   try { await fn(); } catch (err) { toast(err.message, "err"); }
@@ -822,7 +833,8 @@ PAGES.applications = async () => {
     card({
       body: table([
         { label: "Application", render: (r) => nameCell(r.id, r.name, r.slug, true) },
-        { label: "Status", render: (r) => statusBadge(r.status) },
+        { label: "Status", render: (r) => el("div", { class: "tags" }, statusBadge(r.status),
+          r.managed_by && el("span", { title: `Managed by ${r.managed_by}` }, badge("managed", "indigo"))) },
         { label: "ID", render: (r) => idChip(r.id) },
         { label: "", shrink: true, render: (r) => el("div", { class: "row-actions" },
           r.id !== state.appId && btn("Select", { small: true, variant: "ghost", onClick: () => setContext({ appId: r.id }) }),
@@ -839,7 +851,8 @@ PAGES.permissions = async () => {
   if (guard) return guard;
   const perms = await fetchPermissions();
   const app = appById(state.appId);
-  const newBtn = () => btn("New permission", { variant: "primary", iconName: "plus", onClick: action(async () => {
+  const ro = Boolean(managedBy());
+  const newBtn = () => !ro && btn("New permission", { variant: "primary", iconName: "plus", onClick: action(async () => {
     const ok = await modal({
       title: "New permission", description: `Add a permission to ${app.name}.`, submitLabel: "Create",
       body: el("div", {},
@@ -858,9 +871,13 @@ PAGES.permissions = async () => {
   }) });
   return el("div", {},
     pageHeader("Permissions", `Everything ${app.name} can check. Names are matched exactly.`, newBtn()),
+    managedNotice(),
     card({
       body: table([
-        { label: "Permission", render: (p) => el("code", { class: "code-inline" }, p.name) },
+        { label: "Permission", render: (p) => el("div", { class: "tags" },
+          el("code", { class: "code-inline" }, p.name),
+          p.critical && badge("critical", "amber"),
+          p.deprecated && el("span", { title: "No longer in the catalog; counts in no decision" }, badge("deprecated", "red"))) },
         { label: "Resource", render: (p) => p.resource },
         { label: "Action", render: (p) => badge(p.action, "", { mono: true }) },
         { label: "Description", render: (p) => p.description || el("span", { class: "muted" }, "—") },
@@ -882,6 +899,7 @@ PAGES.roles = async () => {
   const app = appById(state.appId);
   const [roles, perms] = await Promise.all([fetchRoles(), fetchPermissions()]);
   const rolePerms = await Promise.all(roles.map((r) => api(`/v1/roles/${r.id}/permissions`)));
+  const ro = Boolean(managedBy());
 
   const editPermissions = (role, current) => action(async () => {
     const ok = await modal({
@@ -893,7 +911,7 @@ PAGES.roles = async () => {
     if (ok) { toast(`${role.name} now grants ${ok.permissions.length} permission(s)`); render(); }
   });
 
-  const newBtn = () => btn("New role", { variant: "primary", iconName: "plus", onClick: action(async () => {
+  const newBtn = () => !ro && btn("New role", { variant: "primary", iconName: "plus", onClick: action(async () => {
     const created = await modal({
       title: "New role", description: `Roles bundle permissions of ${app.name}.`, submitLabel: "Create role", wide: true,
       body: el("div", {},
@@ -924,6 +942,7 @@ PAGES.roles = async () => {
 
   return el("div", {},
     pageHeader("Roles", "Named bundles of permissions, assigned to users (memberships) and agents.", newBtn()),
+    managedNotice(),
     card({
       body: table([
         { label: "Role", render: (r) => el("div", {}, el("div", { class: "cell-main" }, r.name), r.description && el("div", { class: "cell-sub" }, r.description)) },
@@ -934,7 +953,7 @@ PAGES.roles = async () => {
           return el("div", { class: "tags" }, names.slice(0, 4).map((n) => badge(n, "", { mono: true })),
             names.length > 4 && badge(`+${names.length - 4}`));
         } },
-        { label: "", shrink: true, render: (r) => btn("Edit permissions", { small: true, iconName: "pencil",
+        { label: "", shrink: true, render: (r) => !ro && btn("Edit permissions", { small: true, iconName: "pencil",
           onClick: editPermissions(r, rolePerms[roles.indexOf(r)].permissions) }) },
       ], roles, emptyState("layers", "No roles yet", "Create a role for people and one for your agents.", newBtn())),
     }));
@@ -1006,6 +1025,7 @@ PAGES.memberships = async () => {
     fetchUsers(),
   ]);
   const memberships = rows.filter((m) => !m.application_id || m.application_id === state.appId);
+  const ro = Boolean(managedBy());
 
   const grant = action(async () => {
     const taken = new Set(memberships.map((m) => m.user_id));
@@ -1046,9 +1066,10 @@ PAGES.memberships = async () => {
     render();
   });
 
-  const newBtn = () => btn("Grant access", { variant: "primary", iconName: "plus", onClick: grant });
+  const newBtn = () => !ro && btn("Grant access", { variant: "primary", iconName: "plus", onClick: grant });
   return el("div", {},
     pageHeader("Memberships", `Who has which roles in ${t.name} for ${app.name}.`, newBtn()),
+    managedNotice(),
     card({
       body: table([
         { label: "User", render: (m) => {
@@ -1060,7 +1081,7 @@ PAGES.memberships = async () => {
           : el("span", { class: "muted" }, "no roles") },
         { label: "Scope", render: (m) => m.application_id ? app.name : badge("all applications") },
         { label: "Status", render: (m) => statusBadge(m.status) },
-        { label: "", shrink: true, render: (m) => el("div", { class: "row-actions" },
+        { label: "", shrink: true, render: (m) => !(ro && m.application_id) && el("div", { class: "row-actions" },
           btn("Edit roles", { small: true, iconName: "pencil", onClick: editRoles(m) }),
           iconBtn(m.status === "active" ? "pause" : "play", m.status === "active" ? "Suspend" : "Activate", toggle(m), m.status === "active")) },
       ], memberships, emptyState("userCheck", "Nobody has access yet", `Grant a user roles in ${t.name}.`, newBtn())),
@@ -1076,6 +1097,7 @@ PAGES.agents = async () => {
   const app = appById(state.appId);
   const [agents, roles] = await Promise.all([fetchAgents(), fetchRoles()]);
   const roleSets = await Promise.all(agents.map((a) => api(`/v1/agents/${a.id}/roles`)));
+  const ro = Boolean(managedBy());
 
   const editRoles = (agent, current) => action(async () => {
     const ok = await modal({
@@ -1088,7 +1110,7 @@ PAGES.agents = async () => {
     if (ok) { toast(`Roles of ${agent.name} updated`); render(); }
   });
 
-  const newBtn = () => btn("Register agent", { variant: "primary", iconName: "plus", onClick: action(async () => {
+  const newBtn = () => !ro && btn("Register agent", { variant: "primary", iconName: "plus", onClick: action(async () => {
     const ok = await modal({
       title: "Register agent", description: `An AI agent operating in ${t.name} · ${app.name}.`, submitLabel: "Register", wide: true,
       body: el("div", {},
@@ -1111,19 +1133,20 @@ PAGES.agents = async () => {
 
   return el("div", {},
     pageHeader("Agents", "AI agents act for a user. Effective access is always user ∩ agent ∩ tenant mask.", newBtn()),
+    managedNotice(),
     el("div", { class: "callout info" }, icon("info"),
       el("div", {}, "Want a run limited to fewer permissions or a short time window? Issue a ",
         el("a", { href: "#delegations", onclick: (e) => { e.preventDefault(); go("delegations"); } }, "delegation"), ".")),
     card({
       body: table([
-        { label: "Agent", render: (a) => nameCell(a.id, a.name, a.role || null, true) },
+        { label: "Agent", render: (a) => nameCell(a.id, a.display_name || a.name, a.display_name ? a.name : a.role || null, true) },
         { label: "Roles", render: (a) => {
           const names = roleSets[agents.indexOf(a)].roles;
           return names.length ? el("div", { class: "tags" }, names.map((r) => badge(r, "indigo"))) : el("span", { class: "muted" }, "no roles");
         } },
         { label: "Status", render: (a) => statusBadge(a.status) },
         { label: "ID", render: (a) => idChip(a.id) },
-        { label: "", shrink: true, render: (a) => btn("Edit roles", { small: true, iconName: "pencil",
+        { label: "", shrink: true, render: (a) => !ro && btn("Edit roles", { small: true, iconName: "pencil",
           onClick: editRoles(a, roleSets[agents.indexOf(a)].roles) }) },
       ], agents, emptyState("bot", "No agents yet", "Register an agent and give it an agent role.", newBtn())),
     }));
@@ -1136,8 +1159,9 @@ PAGES.invitations = async () => {
   if (guard) return guard;
   const t = tenantById(state.tenantId);
   const [rows, roles] = await Promise.all([api(`/v1/tenants/${t.id}/invitations`), fetchRoles()]);
+  const ro = Boolean(managedBy());
 
-  const newBtn = () => btn("Invite", { variant: "primary", iconName: "plus", onClick: action(async () => {
+  const newBtn = () => !ro && btn("Invite", { variant: "primary", iconName: "plus", onClick: action(async () => {
     const created = await modal({
       title: "Invite someone", description: `They join ${t.name} with these roles when they accept.`, submitLabel: "Create invitation", wide: true,
       body: el("div", {},
@@ -1159,6 +1183,7 @@ PAGES.invitations = async () => {
 
   return el("div", {},
     pageHeader("Invitations", `Pending and past invitations to ${t.name}.`, newBtn()),
+    managedNotice(),
     card({
       body: table([
         { label: "Email", render: (i) => nameCell(i.email, i.email, null) },

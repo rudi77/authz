@@ -1,0 +1,69 @@
+# Contract-test fixture for authz consumers (first: Digital Teammates).
+#
+#   docker compose -f contract/docker-compose.contract.yml up --build -d
+#   # credentials: contract/.secrets/{management,runtime}.json
+#   docker compose -f contract/docker-compose.contract.yml down
+#
+# authz on SQLite with the OAuth Authorization Server on and a fixed signing
+# key; the seed creates application `dtm`, managed by the `dtm-management`
+# client. Test-only: the bootstrap key below is public. See contract/README.md.
+name: authz-contract
+
+x-image: &image
+  image: authz-contract:local
+
+services:
+  keygen:
+    <<: *image
+    build:
+      context: ..
+    entrypoint: ["python", "/contract/keygen.py", "/contract/.secrets"]
+    volumes:
+      - ./:/contract
+
+  authz:
+    <<: *image
+    depends_on:
+      keygen:
+        condition: service_completed_successfully
+    environment:
+      AUTHZ_DATABASE_URL: sqlite+pysqlite:////data/authz.db
+      AUTHZ_API_KEYS: contract-operator-key
+      AUTHZ_OAUTH_AS_ENABLED: "true"
+      AUTHZ_OAUTH_ISSUER: urn:authz:contract
+      AUTHZ_AUDIT_ALL: "true"
+      AUTHZ_LOG_LEVEL: INFO
+    command:
+      - sh
+      - -c
+      - >-
+        export AUTHZ_OAUTH_SIGNING_KEY_PEM="$$(cat /contract/.secrets/signing-key.pem)"
+        && exec uvicorn authz_service.main:app --host 0.0.0.0 --port 8080
+    volumes:
+      - ./:/contract:ro
+    ports:
+      - "${AUTHZ_CONTRACT_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8080/healthz"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  seed:
+    <<: *image
+    depends_on:
+      authz:
+        condition: service_healthy
+    entrypoint:
+      - python
+      - /contract/seed.py
+      - --url
+      - http://authz:8080
+      - --public-url
+      - http://localhost:${AUTHZ_CONTRACT_PORT:-18080}
+      - --admin-key
+      - contract-operator-key
+      - --out
+      - /contract/.secrets
+    volumes:
+      - ./:/contract

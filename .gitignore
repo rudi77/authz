@@ -221,3 +221,6 @@ __marimo__/
 node_modules/
 sdks/typescript/dist/
 sdks/typescript/package-lock.json
+
+# Contract fixture credentials and signing key (test-only, generated)
+contract/.secrets/

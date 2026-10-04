@@ -10,9 +10,9 @@ Contract: `docs/security/authz-integration-vertraege.md` §5 (DTM repo).
 | Z-1 references | done | tenant/app id-or-slug, `user_ref`, `agent_name` on authorize, bulk-authorize, effective-permissions, POST delegations, POST delegations/revoke, GET delegations filters |
 | Z-2 tenant state | done | `PUT /v1/applications/{app}/tenants/{tenant}/state`, atomic, error list |
 | Z-3 catalog | done | `PUT /v1/applications/{app}/catalog`, deprecation, default roles |
-| Z-4 managed_by | API done; UI pending | enforcement on all permission/role/membership/agent write routes + invitations; release-management |
+| Z-4 managed_by | done | enforcement on all permission/role/membership/agent write routes + invitations; release-management (audited); admin UI read-only with "Managed by …" notice (syntax-checked; visual check not possible — shared Playwright browser busy) |
 | Z-5 no silent success | done | |
-| Z-7 contract fixture | pending | Docker daemon currently unresponsive on this machine |
+| Z-7 contract fixture | done, container run NOT verified | `contract/docker-compose.contract.yml` (keygen → authz → seed), `seed.py`, `keygen.py`, README; `.secrets/` gitignored, `contract` dockerignored. `docker compose config` validates; the identical flow ran natively (keygen, uvicorn with env PEM, seed twice = idempotent, manager writes catalog/state, runtime decides with refs, runtime catalog write 403). `docker compose up` could not be run: the Docker Desktop daemon on this machine does not answer (`docker ps` hangs > 60 s, C: has 4.8 GB free); not restarted because other lanes share it |
 | Z-8 tenant roles + cross-tenant fix | done | regression test `tests/integration/test_tenant_role_resolution.py` failed before the fix (9 of 10) |
 
 ## Tests
@@ -23,11 +23,13 @@ files stay locked until engines are disposed; without it ~120 teardown errors
 
 - Baseline (HEAD 54f84c1): 232 passed, 2 skipped
 - After batch A: 283 passed, 2 skipped
+- After batch B (UI, fixture, docs): 283 passed, 2 skipped
 - ruff: clean. mypy: 26 errors before and after (all pre-existing, none new)
 
 ## Commits
 
-- (batch A) Z-1, Z-2, Z-3, Z-4 (API), Z-5, Z-8
+- df963f5 feat(provisioning): Z-1, Z-2, Z-3, Z-4 (API), Z-5, Z-8 + migration 0005 + SDK
+- (batch B) admin UI read-only, contract fixture, docs
 
 ## Decisions / deviation requests for the orchestrator
 
@@ -67,8 +69,12 @@ files stay locked until engines are disposed; without it ~120 teardown errors
     status must be `active|suspended|deleted`, member/agent status `active|disabled`.
 11. **Invitations** for a managed application are blocked (they create memberships on accept).
 
+12. **Signing key of the fixture** is generated once into `contract/.secrets/signing-key.pem`
+    (gitignored) instead of a committed PEM — committing a private key is blocked here and
+    would trip secret scanners. Fixed as long as `.secrets` is kept; consumers may drop their
+    own PEM there.
+
 ## Open
 
-- Z-4 admin UI read-only screens
-- Z-7 fixture (needs a working Docker daemon)
-- CHANGELOG / README / docs / OPEN_ITEMS
+- Verify `docker compose -f contract/docker-compose.contract.yml up` once Docker answers
+- Migration on Postgres not run (needs Docker); SQLite upgrade/downgrade/upgrade verified
