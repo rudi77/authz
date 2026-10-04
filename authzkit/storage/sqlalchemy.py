@@ -25,6 +25,7 @@ from authzkit.agents.models import Agent as AgentModel
 from authzkit.audit.logger import AuditEntry
 from authzkit.provisioning import (
     DESIRED_STATUSES,
+    STATUS_ACTIVE,
     CatalogPermission,
     CatalogResult,
     CatalogRole,
@@ -47,7 +48,6 @@ from authzkit.storage import orm
 from authzkit.tenancy.models import (
     MEMBERSHIP_STATUS_ACTIVE,
     MEMBERSHIP_STATUS_DISABLED,
-    TENANT_STATUSES,
 )
 from authzkit.tenancy.models import (
     Application as ApplicationModel,
@@ -1201,6 +1201,9 @@ class SqlAlchemyStore:
 
         One transaction: the tenant and unknown users are created, listed
         memberships/agents are created or updated, unlisted ones disabled.
+        Tenants and users are shared by all applications: an existing tenant's
+        name/status and an existing user's profile are never changed here
+        (``state.name`` / member names and emails apply on creation only).
         Roles resolve tenant-first; agent permissions live on an internal
         per-agent role. Raises :class:`ProvisioningError` (nothing applied)
         on unknown roles/permissions, duplicates or invalid statuses.
@@ -1220,13 +1223,10 @@ class SqlAlchemyStore:
 
             if tenant is None:
                 tenant = orm.Tenant(
-                    id=str(uuid.uuid4()), slug=tenant_slug, name=state.name, status=state.status
+                    id=str(uuid.uuid4()), slug=tenant_slug, name=state.name, status=STATUS_ACTIVE
                 )
                 s.add(tenant)
-            else:
-                tenant.name = state.name
-                tenant.status = state.status
-            s.flush()
+                s.flush()
 
             result = TenantStateResult(tenant_id=tenant.id)
             self._apply_members(s, tenant.id, application_id, state.members, role_rows, result)
@@ -1241,9 +1241,13 @@ class SqlAlchemyStore:
         perm_rows: dict[str, orm.Permission],
     ) -> None:
         errors: list[ProvisioningIssue] = []
-        if state.status not in TENANT_STATUSES:
+        if state.status != STATUS_ACTIVE:
             errors.append(
-                ProvisioningIssue("status", "invalid_status", f"unknown tenant status {state.status!r}")
+                ProvisioningIssue(
+                    "status",
+                    "tenant_status_not_managed",
+                    "the tenant status belongs to the platform; only 'active' is accepted",
+                )
             )
         seen_users: set[UserRef] = set()
         for i, m in enumerate(state.members):
@@ -1301,8 +1305,9 @@ class SqlAlchemyStore:
         role_rows: dict[str, orm.Role],
         result: TenantStateResult,
     ) -> None:
-        """Set-based: identities, users, memberships and their roles are read
-        in one query each, diffed in memory, then written."""
+        """Set-based: identities, memberships and their roles are read in one
+        query each, diffed in memory, then written. Existing users are left as
+        they are (shared by all applications); new ones get name and email."""
         refs = [(m.user_ref.provider, m.user_ref.issuer, m.user_ref.subject) for m in members]
         identities = (
             {
@@ -1318,12 +1323,6 @@ class SqlAlchemyStore:
                 ).all()
             }
             if refs
-            else {}
-        )
-        user_ids = [i.user_id for i in identities.values()]
-        users = (
-            {u.id: u for u in s.scalars(select(orm.User).where(orm.User.id.in_(user_ids))).all()}
-            if user_ids
             else {}
         )
         memberships = {
@@ -1343,26 +1342,21 @@ class SqlAlchemyStore:
         desired_users: set[str] = set()
         for m, ref in zip(members, refs, strict=True):
             ident = identities.get(ref)
-            if ident is not None:
-                user = users[ident.user_id]
-            else:
-                user, _ = self._upsert_identity(
+            if ident is None:
+                _, ident = self._upsert_identity(
                     s, None, m.user_ref, email=m.email, display_name=m.display_name
                 )
-            if m.display_name is not None:
-                user.display_name = m.display_name
-            if m.email is not None:
-                user.email = m.email
-            desired_users.add(user.id)
+            user_id = ident.user_id
+            desired_users.add(user_id)
 
             role_ids = {role_rows[n].id for n in m.roles}
-            membership = memberships.get(user.id)
+            membership = memberships.get(user_id)
             if membership is None:
                 membership = orm.Membership(
                     id=str(uuid.uuid4()),
                     tenant_id=tenant_id,
                     application_id=application_id,
-                    user_id=user.id,
+                    user_id=user_id,
                     status=m.status,
                 )
                 s.add(membership)
@@ -1375,7 +1369,7 @@ class SqlAlchemyStore:
                 membership.status = m.status
             desired.append((membership, role_ids, current))
 
-        s.flush()  # new users / memberships exist before their link rows
+        s.flush()  # new memberships exist before their link rows
         for membership, role_ids, current in desired:
             self._replace_links(
                 s, orm.membership_roles, "membership_id", membership.id, role_ids, current

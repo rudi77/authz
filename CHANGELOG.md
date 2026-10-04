@@ -31,7 +31,11 @@
   memberships and agents of one tenant in one transaction; unlisted
   memberships/agents become `disabled`; agent permissions live on an
   internal per-agent role. Invalid input → 422 `invalid_state` with every
-  error, nothing applied.
+  error, nothing applied. Tenants and users are shared by all applications:
+  a missing tenant is created (`name`, status `active`) and missing users
+  with `display_name` / `email`, but an existing tenant's name/status and an
+  existing user's profile are never changed; a tenant `status` other than
+  `active` → 422 (`tenant_status_not_managed`).
 - Tenant role overrides: `GET|PUT|DELETE
   /v1/applications/{app}/tenants/{tenant}/roles[/{name}]`.
 - Contract-test fixture: `contract/docker-compose.contract.yml` (see

@@ -41,9 +41,23 @@ Windows: `PYTHONPATH=D:/Source/tmp/winplug .venv/Scripts/python.exe -m pytest -q
 
 - Baseline: 283 passed, 2 skipped
 - Final (full suite): 298 passed, 2 skipped (+15 new: guard 2, claim 4, reference resolution 9)
+- After shared-row fix: 302 passed, 2 skipped (+4)
 - ruff clean; mypy 26 → 19 errors (pre-existing ones removed, none new)
 
 ## Commits
 
 - ef6f2ac: item 1 + 7 (+ part of 5)
 - batch 2: items 2, 3, 4, 5, 6
+
+## Follow-up (orchestrator, after merge of 38d2a6f): shared tenant/user rows
+
+`apply_tenant_state` overwrote an existing tenant's name/status and existing
+users' display_name/email — rows shared by all applications. Now: a missing
+tenant is created (`name`, status `active`), missing users with
+display_name/email; existing tenant and user rows are never modified; a
+tenant `status` other than `active` → 422 `invalid_state` with
+`{"path": "status", "code": "tenant_status_not_managed"}` (field kept, so
+DTM's `"status": "active"` keeps working). Test:
+`tests/integration/test_tenant_state_shared_rows.py` (written first, 3 of 4
+failed before the fix). The users prefetch in `_apply_members` is gone (only
+`ExternalIdentity.user_id` is needed). CHANGELOG, README, docs/service.md updated.

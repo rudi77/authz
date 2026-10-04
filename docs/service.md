@@ -34,7 +34,7 @@ Tenant/application accept id or slug; subjects accept `user_ref`
 | Method | Path | Purpose |
 |--------|------|---------|
 | PUT | `/v1/applications/{app}/catalog` | Permissions + default roles; creates the app, caller becomes `managed_by` |
-| PUT | `/v1/applications/{app}/tenants/{tenant}/state` | Members + agents of one tenant (manager only, atomic) |
+| PUT | `/v1/applications/{app}/tenants/{tenant}/state` | Members + agents of one tenant (manager only, atomic); creates a missing tenant/users, never changes existing tenant name/status or user profiles |
 | GET | `/v1/applications/{app}/tenants/{tenant}/roles` | Default roles with tenant overrides |
 | PUT/DELETE | `/v1/applications/{app}/tenants/{tenant}/roles/{name}` | Set / remove a tenant override (manager only) |
 | POST | `/v1/applications/{app}/release-management` | Clear `managed_by` (admin, audited) |

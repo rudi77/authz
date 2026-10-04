@@ -236,7 +236,9 @@ Declarative provisioning (for an application owned by one client, see
 - `PUT /v1/applications/{app}/catalog` — complete permission list + default
   roles; creates the application and makes the caller its manager
 - `PUT /v1/applications/{app}/tenants/{tenant}/state` — complete members and
-  agents of one tenant; atomic, 422 with an error list
+  agents of one tenant; atomic, 422 with an error list. Creates a missing
+  tenant / missing users, but never changes an existing tenant's name or
+  status or an existing user's profile (shared by all applications)
 - `GET /v1/applications/{app}/tenants/{tenant}/roles`,
   `PUT|DELETE /v1/applications/{app}/tenants/{tenant}/roles/{name}` — tenant
   overrides of default roles
