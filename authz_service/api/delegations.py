@@ -77,7 +77,8 @@ class DelegationIn(BaseModel):
     permissions: list[str] | None = Field(
         default=None,
         description="Subset to delegate. Omit to delegate everything the agent "
-        "may currently do for this user (user ∩ agent ∩ tenant mask).",
+        "may currently do for this user (user ∩ agent ∩ tenant mask); if that is "
+        "empty, or the list is empty, the grant authorizes nothing.",
     )
     ttl_seconds: int | None = Field(default=None, ge=1)
     purpose: str | None = Field(default=None, max_length=1024)
@@ -188,6 +189,9 @@ def create_delegation(
         )
 
     # What the agent may do for this user right now — a grant can only narrow it.
+    # An empty set (agent without tools, inactive user/agent) or an explicit
+    # empty list still yields a grant: it binds user, agent and run, and
+    # authorizes nothing (every check denies).
     available = engine.effective_permissions(
         tenant_id=tenant_id,
         application_id=application_id,
@@ -203,14 +207,6 @@ def create_delegation(
                 status_code=403,
                 detail={"error": "permissions_not_delegable", "permissions": not_delegable},
             )
-    if not requested:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "nothing_to_delegate",
-                "hint": "user ∩ agent is empty, or the user/agent is inactive",
-            },
-        )
 
     kwargs = dict(
         tenant_id=tenant_id,

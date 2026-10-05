@@ -494,7 +494,9 @@ class AuthzClient:
         Give the user as ``user_id`` or ``user_ref`` and the agent as
         ``agent_id`` or ``agent_name``. ``permissions=None`` delegates
         everything the agent may currently do for this user. A subset
-        outside ``user ∩ agent`` is rejected (403).
+        outside ``user ∩ agent`` is rejected (403). An empty result (nothing
+        delegable, or ``permissions=[]``) still issues a grant that binds the
+        run and authorizes nothing.
         """
         body: dict[str, Any] = {"tenant_id": tenant_id, "application_id": application_id}
         if user_id is not None:

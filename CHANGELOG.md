@@ -94,6 +94,13 @@
   `ResolvedReferences` on `AuthorizeRequest` / `BulkAuthorizeRequest` /
   `effective_permissions`; the engine then skips its own tenant /
   application / agent-by-name reads. HTTP behaviour unchanged.
+- `POST /v1/delegations` issues a grant even when nothing is delegable
+  (agent without tools, empty `user ∩ agent ∩ mask`, inactive user/agent) or
+  `permissions: []` is sent: the grant binds user, agent and run and
+  authorizes nothing — every check with it denies (`not_delegated` /
+  `missing_permission`). Previously 409 `nothing_to_delegate`, which is gone.
+  Explicit permissions outside the delegable set stay 403
+  `permissions_not_delegable`.
 
 ## Unreleased — Admin console redesign
 

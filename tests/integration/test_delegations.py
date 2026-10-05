@@ -165,10 +165,61 @@ def test_issue_validations(client):
         headers=HEADERS,
     )
     assert r.status_code == 400 and r.json()["detail"]["error"] == "ttl_too_long"
-    # Suspended membership → nothing left to delegate.
+    # Suspended membership → nothing left to delegate: the grant still binds
+    # the run but authorizes nothing (spec change: was 409 nothing_to_delegate).
     client.patch(f"/v1/memberships/{ids['membership']}", json={"status": "suspended"}, headers=HEADERS)
     r = client.post("/v1/delegations", json={**base, "agent_id": ids["agent"]}, headers=HEADERS)
-    assert r.status_code == 409 and r.json()["detail"]["error"] == "nothing_to_delegate"
+    assert r.status_code == 201 and r.json()["permissions"] == []
+    assert _authorize(client, ids, r.json()["token"], "read")["allowed"] is False
+
+
+def test_empty_delegable_set_still_issues_a_grant(client):
+    """An agent without tools (no roles) still gets a grant for its run."""
+    ids = _seed(client)
+    client.put(f"/v1/agents/{ids['agent']}/roles", json={"roles": []}, headers=HEADERS)
+
+    grant = _grant(client, ids, purpose="run 7")
+    assert grant["permissions"] == [] and grant["active"] is True
+    claims = jwt.decode(grant["token"], options={"verify_signature": False})
+    assert claims["authz"]["permissions"] == []
+    for action in ["read", "review", "approve"]:
+        decision = _authorize(client, ids, grant["token"], action)
+        assert decision["allowed"] is False
+        assert decision["reason"] in {"not_delegated", "missing_permission"}
+    body = {
+        "tenant_id": ids["tenant"], "application_id": ids["app"],
+        "subject": {"type": "agent", "user_id": ids["user"], "agent_id": ids["agent"]},
+    }
+    eff = client.post(
+        "/v1/effective-permissions",
+        json=body,
+        headers={**HEADERS, "X-Delegation-Token": grant["token"]},
+    ).json()
+    assert eff["permissions"] == []
+
+    # Explicit empty list: same result, an empty grant.
+    assert _grant(client, ids, permissions=[])["permissions"] == []
+    # Explicit permissions outside the (empty) delegable set stay 403.
+    r = client.post(
+        "/v1/delegations",
+        json={
+            "tenant_id": ids["tenant"], "application_id": ids["app"], "user_id": ids["user"],
+            "agent_id": ids["agent"], "permissions": ["contracts.read"],
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 403
+    assert r.json()["detail"] == {
+        "error": "permissions_not_delegable", "permissions": ["contracts.read"],
+    }
+
+
+def test_explicit_empty_list_issues_an_empty_grant(client):
+    ids = _seed(client)
+    grant = _grant(client, ids, permissions=[])
+    assert grant["permissions"] == []
+    denied = _authorize(client, ids, grant["token"], "read")
+    assert denied["allowed"] is False and denied["reason"] == "not_delegated"
 
 
 # ---------------------------------------------------------------- narrowing

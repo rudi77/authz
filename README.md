@@ -403,6 +403,9 @@ How it works:
 - `POST /v1/delegations` returns an RS256 JWT (RFC 8693 style: `sub` = user,
   `act.sub` = agent, `jti` = grant id, `authz.permissions`). The subset must lie
   within the agent's current `user ∩ agent` set (else `403 permissions_not_delegable`).
+  An empty set — omitted `permissions` with nothing delegable (e.g. an agent
+  without tools), or `permissions: []` — still issues a grant: it binds the
+  run and authorizes nothing.
 - Send it as **`X-Delegation-Token`** on `/v1/authorize`, `/v1/bulk-authorize`
   or `/v1/effective-permissions`. The decision becomes
   `user ∩ agent ∩ tenant mask ∩ grant`; user/agent/mask are still resolved
