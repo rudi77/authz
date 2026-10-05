@@ -496,7 +496,8 @@ class AuthzClient:
         everything the agent may currently do for this user. A subset
         outside ``user ∩ agent`` is rejected (403). An empty result (nothing
         delegable, or ``permissions=[]``) still issues a grant that binds the
-        run and authorizes nothing.
+        run and authorizes nothing; an inactive user or agent gets 409
+        (``no_active_user_membership`` / ``agent_not_active``).
         """
         body: dict[str, Any] = {"tenant_id": tenant_id, "application_id": application_id}
         if user_id is not None:

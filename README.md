@@ -405,7 +405,8 @@ How it works:
   within the agent's current `user ∩ agent` set (else `403 permissions_not_delegable`).
   An empty set — omitted `permissions` with nothing delegable (e.g. an agent
   without tools), or `permissions: []` — still issues a grant: it binds the
-  run and authorizes nothing.
+  run and authorizes nothing. An inactive party gets none: `409
+  no_active_user_membership` or `409 agent_not_active`.
 - Send it as **`X-Delegation-Token`** on `/v1/authorize`, `/v1/bulk-authorize`
   or `/v1/effective-permissions`. The decision becomes
   `user ∩ agent ∩ tenant mask ∩ grant`; user/agent/mask are still resolved

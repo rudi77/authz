@@ -78,7 +78,8 @@ class DelegationIn(BaseModel):
         default=None,
         description="Subset to delegate. Omit to delegate everything the agent "
         "may currently do for this user (user ∩ agent ∩ tenant mask); if that is "
-        "empty, or the list is empty, the grant authorizes nothing.",
+        "empty, or the list is empty, the grant authorizes nothing. An inactive "
+        "user or agent gets 409 instead.",
     )
     ttl_seconds: int | None = Field(default=None, ge=1)
     purpose: str | None = Field(default=None, max_length=1024)
@@ -176,10 +177,19 @@ def create_delegation(
         else require_agent_id(store, tenant_id, application_id, body.agent_name)
     )
 
-    if agent_id is None or store.get_agent(
+    agent = None if agent_id is None else store.get_agent(
         tenant_id=tenant_id, application_id=application_id, agent_id=agent_id
-    ) is None:
+    )
+    if agent_id is None or agent is None:
         raise HTTPException(status_code=404, detail={"reason": "agent_not_found"})
+    # An inactive user or agent gets no grant (reasons named as the engine
+    # names them); only an empty set between two active parties is issued.
+    if user_id is None or not store.is_user_membership_active(
+        tenant_id=tenant_id, application_id=application_id, user_id=user_id
+    ):
+        raise HTTPException(status_code=409, detail={"error": "no_active_user_membership"})
+    if agent.status != "active":
+        raise HTTPException(status_code=409, detail={"error": "agent_not_active"})
 
     ttl = body.ttl_seconds or settings.delegation_default_ttl_seconds
     if ttl > settings.delegation_max_ttl_seconds:
@@ -189,7 +199,7 @@ def create_delegation(
         )
 
     # What the agent may do for this user right now — a grant can only narrow it.
-    # An empty set (agent without tools, inactive user/agent) or an explicit
+    # An empty set (agent without tools, empty intersection) or an explicit
     # empty list still yields a grant: it binds user, agent and run, and
     # authorizes nothing (every check denies).
     available = engine.effective_permissions(

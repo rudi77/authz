@@ -165,12 +165,36 @@ def test_issue_validations(client):
         headers=HEADERS,
     )
     assert r.status_code == 400 and r.json()["detail"]["error"] == "ttl_too_long"
-    # Suspended membership → nothing left to delegate: the grant still binds
-    # the run but authorizes nothing (spec change: was 409 nothing_to_delegate).
+    # Suspended membership → no grant; reason as the engine names it
+    # (spec change: was 409 nothing_to_delegate).
     client.patch(f"/v1/memberships/{ids['membership']}", json={"status": "suspended"}, headers=HEADERS)
     r = client.post("/v1/delegations", json={**base, "agent_id": ids["agent"]}, headers=HEADERS)
-    assert r.status_code == 201 and r.json()["permissions"] == []
-    assert _authorize(client, ids, r.json()["token"], "read")["allowed"] is False
+    assert r.status_code == 409
+    assert r.json()["detail"]["error"] == "no_active_user_membership"
+
+
+def test_inactive_agent_gets_no_grant(client):
+    ids = _seed(client)
+    from authz_service import dependencies
+    from authzkit.agents.models import AGENT_STATUS_DISABLED
+    from authzkit.storage import orm
+
+    store = dependencies._store
+    assert store is not None
+    with store.session() as s:
+        s.get(orm.Agent, ids["agent"]).status = AGENT_STATUS_DISABLED
+        s.commit()
+    for body in [{}, {"permissions": []}]:
+        r = client.post(
+            "/v1/delegations",
+            json={
+                "tenant_id": ids["tenant"], "application_id": ids["app"],
+                "user_id": ids["user"], "agent_id": ids["agent"], **body,
+            },
+            headers=HEADERS,
+        )
+        assert r.status_code == 409
+        assert r.json()["detail"]["error"] == "agent_not_active"
 
 
 def test_empty_delegable_set_still_issues_a_grant(client):
