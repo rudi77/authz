@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Get started — authz</title>
+  <meta name="description" content="Start the authz service with Docker, describe a small application in the admin console, check a first decision with curl or PowerShell, then connect Python and an agent.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="features.html">Features</a></li>
+        <li><a href="architecture.html">Architecture</a></li>
+        <li><a href="principles.html">Principles</a></li>
+        <li><a href="get-started.html" aria-current="page">Get started</a></li>
+        <li><a href="blog/index.html">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Get started</div>
+  <h1>Check your first decision</h1>
+  <p class="section-intro">We will start the service, describe a small contract application in the admin console and ask whether a user may approve a contract. Then we connect a Python program and let an agent work for that user with a narrower set of permissions. The guide assumes Docker and, for the later sections, Python 3.11 or newer.</p>
+  <nav class="toc" aria-label="Page contents"><strong>On this page</strong><ol>
+    <li><a href="#run">Start the service</a></li>
+    <li><a href="#sign-in">Sign in to the admin console</a></li>
+    <li><a href="#model">Describe who may do what</a></li>
+    <li><a href="#first-decision">Ask for a decision</a></li>
+    <li><a href="#python">Check from a Python application</a></li>
+    <li><a href="#agent">Let an agent work for the user</a></li>
+    <li><a href="#production">Prepare a real deployment</a></li>
+    <li><a href="#troubleshooting">Troubleshoot the first run</a></li>
+  </ol></nav>
+  <div class="prose">
+    <h2 id="run">1. Start the service</h2>
+    <p>Clone the repository first. Both ways of running the service below use it.</p>
+<pre><code>git clone https://github.com/rudi77/authz.git
+cd authz</code></pre>
+    <h3>With PostgreSQL and Redis</h3>
+    <p>The included Compose file starts PostgreSQL, Redis and the service, applies the database migrations and configures the admin key <code>dev-key</code>:</p>
+<pre><code>docker compose up --build</code></pre>
+    <p>Wait for the line <code>authz: admin UI on http://localhost:8080/admin/</code>. The first build downloads base images and Python packages and can take a few minutes. Compose publishes PostgreSQL on port 5432 and Redis on port 6379; if other services already use these ports, remove the corresponding <code>ports</code> entries from <code>docker-compose.yml</code>. The service itself does not need them.</p>
+    <h3>As a single container</h3>
+    <p>Without Compose, the service stores its data in SQLite inside a Docker volume. This command is the same in Bash and PowerShell:</p>
+<pre><code>docker build -t authz .
+docker run --rm -p 8080:8080 -e AUTHZ_API_KEYS=dev-key -v authz-data:/data authz</code></pre>
+    <p><code>AUTHZ_API_KEYS</code> sets the key that grants full administrative access. Without it, the service rejects every request, because it is configured to refuse access when no credential is set up.</p>
+    <h3>Check that it answers</h3>
+<pre><code># Bash
+curl http://localhost:8080/healthz
+
+# PowerShell (curl.exe; "curl" alone is an alias for Invoke-WebRequest)
+curl.exe http://localhost:8080/healthz</code></pre>
+    <p>The response is <code>{"status":"ok","database":"ok"}</code>. A <code>degraded</code> status means the service runs but cannot reach its database.</p>
+
+    <h2 id="sign-in">2. Sign in to the admin console</h2>
+    <p>Open <code>http://localhost:8080/admin/</code> and enter <code>dev-key</code> as the API key. The key stays in this browser tab unless you choose to remember it. The overview page shows a setup checklist; the next section follows it.</p>
+    <p>If the page still shows an older interface after an upgrade, reload it once with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>. Later versions of the page are revalidated automatically.</p>
+
+    <h2 id="model">3. Describe who may do what</h2>
+    <p>A <strong>permission</strong> is a name your application checks, written as <code>resource.action</code>. A <strong>role</strong> groups permissions, and a <strong>membership</strong> gives a user roles within one tenant, which is usually one of your customers. Create the following in the console. Each page has a button in its top right corner for this purpose:</p>
+    <div class="table-wrap"><table><thead><tr><th>Page</th><th>Create</th><th>Values</th></tr></thead><tbody>
+      <tr><td>Tenants</td><td>New tenant</td><td>Name <code>ACME Corp</code>, slug <code>acme</code></td></tr>
+      <tr><td>Applications</td><td>New application</td><td>Name <code>Contract AI</code>, slug <code>contract-ai</code></td></tr>
+      <tr><td>Permissions</td><td>New permission, three times</td><td><code>contracts.read</code>, <code>contracts.review</code>, <code>contracts.approve</code></td></tr>
+      <tr><td>Roles</td><td>New role</td><td><code>lawyer</code>, scope Application, all three permissions ticked</td></tr>
+      <tr><td>Users</td><td>Add user</td><td>Name <code>Alice</code>, provider <em>Any OIDC provider (generic_oidc)</em>, issuer <code>https://idp.example.com</code>, subject <code>alice</code></td></tr>
+      <tr><td>Memberships</td><td>Grant access</td><td>Alice with the role <code>lawyer</code></td></tr>
+    </tbody></table></div>
+    <p>The tenant and application you create are selected in the switcher at the top, and later pages work within that selection. The provider, issuer and subject identify Alice the way her login token will: in a real application they come from the <code>iss</code> and <code>sub</code> claims of an OIDC token.</p>
+    <p>For repeatable setups, the <code>authz bootstrap</code> command creates the same structure from a YAML file. See <a href="https://github.com/rudi77/authz/blob/main/examples/bootstrap.example.yaml"><code>examples/bootstrap.example.yaml</code></a>.</p>
+
+    <h2 id="first-decision">4. Ask for a decision</h2>
+    <p>Applications do not know authz's internal ids. They know who signed in. The first call therefore turns Alice's identity into ids, and the second asks the actual question.</p>
+    <h3>Bash</h3>
+<pre><code>curl -s -X POST http://localhost:8080/v1/resolve-context \
+  -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
+  -d '{"application_id": "contract-ai", "provider": "generic_oidc",
+       "issuer": "https://idp.example.com", "subject": "alice"}'</code></pre>
+    <p>The response contains the ids and Alice's roles and permissions:</p>
+<pre><code>{"tenant_id":"30d1d52d-…","application_id":"63347777-…","user_id":"e728c284-…","roles":["lawyer"],"permissions":["contracts.approve","contracts.read","contracts.review"]}</code></pre>
+    <p>Your ids differ; they are shortened here. Note that <code>application_id</code> takes the application's slug in this call. authz found ACME because it is Alice's only tenant. For a user in several tenants, add <code>"explicit_tenant_id"</code> with the tenant's id, which the Tenants page lets you copy, or configure a <a href="features.html#identities">tenant mapping</a>. All later calls use the ids from the response. Insert them into the decision request:</p>
+<pre><code>curl -s -X POST http://localhost:8080/v1/authorize \
+  -H "X-API-Key: dev-key" -H "Content-Type: application/json" \
+  -d '{"tenant_id": "&lt;tenant_id&gt;", "application_id": "&lt;application_id&gt;",
+       "subject": {"type": "user", "user_id": "&lt;user_id&gt;"},
+       "resource": "contracts", "action": "approve"}'</code></pre>
+<pre><code>{"allowed":true,"decision":"allow","reason":"permission_granted","required_permission":"contracts.approve","matched_permissions":["contracts.approve"]}</code></pre>
+    <h3>PowerShell</h3>
+    <p><code>Invoke-RestMethod</code> converts the JSON responses into objects, so the ids can be passed on directly:</p>
+<pre><code>$h = @{ "X-API-Key" = "dev-key" }
+$who = @{ application_id = "contract-ai"; provider = "generic_oidc";
+          issuer = "https://idp.example.com"; subject = "alice" } | ConvertTo-Json
+$ctx = Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/resolve-context `
+         -Headers $h -ContentType "application/json" -Body $who
+
+$ask = @{ tenant_id = $ctx.tenant_id; application_id = $ctx.application_id
+          subject = @{ type = "user"; user_id = $ctx.user_id }
+          resource = "contracts"; action = "approve" } | ConvertTo-Json
+Invoke-RestMethod -Method Post -Uri http://localhost:8080/v1/authorize `
+  -Headers $h -ContentType "application/json" -Body $ask</code></pre>
+    <h3>See a refusal</h3>
+    <p>Ask again with <code>"action": "delete"</code>. The response has <code>"allowed": false</code> and the reason <code>missing_permission</code>, because no role grants <code>contracts.delete</code>. The refusal also appears on the console's <em>Audit log</em> page. The <em>Decision probe</em> page asks the same questions without a terminal.</p>
+
+    <h2 id="python">5. Check from a Python application</h2>
+    <p>The Python SDK wraps these calls. Install it from the repository into the environment of your application:</p>
+<pre><code>pip install "git+https://github.com/rudi77/authz.git@main"</code></pre>
+    <p>The package also contains the service and its dependencies; the client uses only a small part of it. In the console, create a key on the <em>API keys</em> page with the scope <code>runtime</code>. A runtime key can ask for decisions but cannot change roles, which suits an application better than the admin key. Save the following as <code>check.py</code>, replacing the placeholder with that key:</p>
+<pre><code>from authz_sdk import AuthzClient, Subject
+
+authz = AuthzClient("http://localhost:8080", api_key="&lt;runtime-key&gt;", cache_ttl_seconds=60)
+
+# In a web application these values come from the verified login token.
+ctx = authz.resolve_context(
+    application_id="contract-ai",
+    provider="generic_oidc",
+    issuer="https://idp.example.com",
+    subject="alice",
+)
+alice = Subject(type="user", user_id=ctx.user_id)
+
+for action in ("approve", "delete"):
+    result = authz.authorize_decision(
+        tenant_id=ctx.tenant_id, application_id=ctx.application_id,
+        subject=alice, resource="contracts", action=action,
+    )
+    print(f"contracts.{action}: {result.decision} ({result.reason})")
+
+print(sorted(authz.get_effective_permissions(
+    tenant_id=ctx.tenant_id, application_id=ctx.application_id, subject=alice)))</code></pre>
+<pre><code>python check.py</code></pre>
+<pre><code>contracts.approve: allow (permission_granted)
+contracts.delete: deny (missing_permission)
+['contracts.approve', 'contracts.read', 'contracts.review']</code></pre>
+    <p>In a web framework, the same check usually runs before a request handler. <code>authz.require(...)</code> raises <code>PermissionDeniedError</code> on a refusal, which you can translate into an HTTP 403 response. The effective-permission list is cached for 60 seconds here, so a role change can take that long to appear in it; <code>authorize_decision</code> always asks the service.</p>
+
+    <h2 id="agent">6. Let an agent work for the user</h2>
+    <p>Suppose an AI agent should read contracts for Alice and leave review comments, but never approve anything. Register it on the console's <em>Agents</em> page and give it a role of its own:</p>
+    <ol>
+      <li>On <em>Roles</em>, create <code>analyzer</code> with scope Agent and the permissions <code>contracts.read</code> and <code>contracts.review</code>.</li>
+      <li>On <em>Agents</em>, register <code>contract-analyzer</code>. The <code>analyzer</code> role is preselected. Copy the agent's id.</li>
+    </ol>
+    <p>The agent may now do what both it and Alice may do: <code>contracts.read</code> and <code>contracts.review</code>. Alice's approval right does not carry over, because the agent's role lacks it. For one particular run you can narrow this further with a <strong>delegation grant</strong>, a signed token limited to selected permissions and a time span. Grants need a signing key, which the single-container setup creates automatically; with Compose and PostgreSQL, create it once:</p>
+<pre><code>docker compose exec authz authz oauth signing-key generate</code></pre>
+    <p>Append the following to <code>check.py</code>, replacing <code>&lt;agent-id&gt;</code>:</p>
+<pre><code>from authz_sdk import PermissionDeniedError
+from authz_sdk.agent_session import start_delegated_agent_session
+
+grant = authz.create_delegation(
+    tenant_id=ctx.tenant_id, application_id=ctx.application_id,
+    user_id=ctx.user_id, agent_id="&lt;agent-id&gt;",
+    permissions={"contracts.read"}, ttl_seconds=900,
+    purpose="Summarise NDA #42",
+)
+
+# The agent runtime receives only grant.token.
+guard = start_delegated_agent_session(authz, grant.token)
+print("agent may:", sorted(guard.permissions))
+try:
+    guard.require("contracts", "review")
+except PermissionDeniedError as exc:
+    print("refused:", exc.permission)
+
+authz.revoke_delegation(grant.id)
+print(authz.introspect_delegation(grant.token))</code></pre>
+<pre><code>agent may: ['contracts.read']
+refused: contracts.review
+{'active': False, 'reason': 'delegation_revoked'}</code></pre>
+    <p>The guard checks permissions locally against the set it loaded at the start, so <code>guard.require</code> costs no network call. That also means a revocation reaches it only when the guard asks the service again; list actions that need this in <code>critical_actions</code>. The <a href="blog/delegating-access-to-agents.html">article on delegating access</a> follows this run in detail. The <em>Delegations</em> page in the console lists active grants and can revoke all grants of an agent at once.</p>
+
+    <h2 id="production">7. Prepare a real deployment</h2>
+    <p>The steps above use a development key and default settings. Before other people depend on the service, change at least the following:</p>
+    <ul>
+      <li>Replace <code>dev-key</code> with a long random value, for example from <code>python -c "import secrets; print(secrets.token_urlsafe(32))"</code>. Give applications runtime keys created in the console.</li>
+      <li>Use PostgreSQL and set <code>AUTHZ_RUN_MIGRATIONS=true</code>, or run <code>alembic upgrade head</code> before each upgrade. With PostgreSQL, the service does not change the schema by itself.</li>
+      <li>Set <code>AUTHZ_OAUTH_SIGNING_KEY_PEM</code> if you use delegation grants or OAuth tokens, so the key is managed outside the database.</li>
+      <li>Configure admin sign-in through your identity provider, or place <code>/admin</code> behind an authenticating proxy.</li>
+    </ul>
+    <p><a href="https://github.com/rudi77/authz/blob/main/SECURITY.md">SECURITY.md</a> contains the complete hardening checklist, and the <a href="https://github.com/rudi77/authz#configuration">configuration reference</a> lists every setting.</p>
+
+    <h2 id="troubleshooting">8. Troubleshoot the first run</h2>
+    <div class="table-wrap"><table><thead><tr><th>Symptom</th><th>What to check</th></tr></thead><tbody>
+      <tr><td>Every request returns 401 <code>missing_or_invalid_api_key</code></td><td>Send the key in the <code>X-API-Key</code> header and check that it matches <code>AUTHZ_API_KEYS</code>.</td></tr>
+      <tr><td>The container exits with <code>exec /usr/local/bin/docker-entrypoint.sh … No such file or directory</code></td><td>Your checkout predates the line-ending fix for Windows. Pull the current version and rebuild.</td></tr>
+      <tr><td>The admin page shows an error or an older layout</td><td>Reload with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>R</kbd>, and confirm with <code>git log -1</code> that the build used the current code.</td></tr>
+      <tr><td><code>resolve-context</code> answers 400 <code>unknown application</code></td><td>This call expects the application's slug, such as <code>contract-ai</code>, not its id.</td></tr>
+      <tr><td><code>resolve-context</code> answers 404 <code>no_active_membership</code></td><td>The user exists but has no active membership in this tenant. Grant one on the Memberships page.</td></tr>
+      <tr><td>A decision is denied with <code>tenant_feature_disabled</code></td><td>The tenant's permission mask excludes this permission. See <em>Feature controls</em>.</td></tr>
+      <tr><td>Issuing a delegation returns 503 <code>signing_key_unavailable</code></td><td>Create a signing key as shown in <a href="#agent">section 6</a>.</td></tr>
+    </tbody></table></div>
+    <p>The <a href="features.html">feature guide</a> explains what to add next. The interactive API reference is available at <code>http://localhost:8080/docs</code> while the service runs.</p>
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="features.html">Features</a> · <a href="architecture.html">Architecture</a> · <a href="principles.html">Principles</a> · <a href="get-started.html">Get started</a> · <a href="blog/index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="assets/site.js"></script>
+</body>
+</html>

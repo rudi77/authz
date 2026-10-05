@@ -72,6 +72,15 @@ This is a Policy Decision Point (PDP), not an authenticator and not a tool runti
 
 **Permissions naming convention**: `<resource>.<action>` or namespaced `<namespace>.<resource>.<action>` (e.g. `mcp.github.create_issue`). Encoded everywhere as a flat string; the engine never parses the dots.
 
+## Website and blog
+
+Before writing or revising anything under `website/` (pages, blog posts,
+titles, descriptions), read [website/EDITORIAL_GUIDE.md](website/EDITORIAL_GUIDE.md)
+in full and apply it; [website/README.md](website/README.md) describes structure,
+preview and publishing. The public site is English, plain HTML/CSS with no
+build step, published by `.github/workflows/pages.yml`. Keep editorial rules in
+the guide rather than duplicating them here.
+
 ## Conventions specific to this repo
 
 - Python ≥3.11. Ruff line-length 100 with `E501` ignored — long doc strings/examples are fine, but new code should still wrap.

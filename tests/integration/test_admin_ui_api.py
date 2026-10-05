@@ -76,7 +76,7 @@ def test_admin_ui_is_served(client: TestClient):
     assert r.headers["cache-control"] == "no-cache"
     # Versioned asset URLs so stale pre-no-cache copies are never reused.
     assert 'src="./app.js?v=' in r.text and 'href="./styles.css?v=' in r.text
-    js = client.get("/admin/app.js?v=2")
+    js = client.get("/admin/app.js?v=3")
     assert js.status_code == 200 and js.headers["cache-control"] == "no-cache"
     # Conditional requests still get a cheap 304.
     again = client.get("/admin/app.js", headers={"If-None-Match": js.headers["etag"]})
@@ -193,3 +193,23 @@ def test_agent_roles_readable(client: TestClient):
     r = client.get(f"/v1/agents/{agent['id']}/roles", headers=HEADERS)
     assert r.json()["roles"] == ["reviewer"]
     assert client.get("/v1/agents/missing/roles", headers=HEADERS).status_code == 404
+
+
+def test_preprovisioned_user_is_recognised_at_login(client: TestClient):
+    """A user added in the admin UI must be the same user resolve-context finds."""
+    tenant, app, _, user = _seed(client)
+    r = client.post(
+        "/v1/resolve-context",
+        json={
+            "application_id": app["slug"],  # resolve-context takes the slug
+            "provider": "entra",  # as stored by _seed via POST /v1/users
+            "issuer": "https://login.example.com",
+            "subject": "u-1",
+            "explicit_tenant_id": tenant["id"],
+        },
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["user_id"] == user["id"]
+    assert "reviewer" in body["roles"]

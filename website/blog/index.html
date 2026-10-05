@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blog — authz</title>
+  <meta name="description" content="Explanations of authz with one worked example per article, implementation details and the limits of each mechanism.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%277%27 fill=%27%234f46e5%27/%3E%3Ctext x=%2716%27 y=%2721%27 font-family=%27monospace%27 font-size=%2715%27 font-weight=%27700%27 fill=%27%23fff%27 text-anchor=%27middle%27%3Eaz%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="../index.html"><span class="mark">az</span> authz <span class="version">v0.2</span></a>
+    <button class="nav-toggle" aria-expanded="false" aria-controls="nav">Menu</button>
+    <nav class="main" id="nav">
+      <ul>
+        <li><a href="../features.html">Features</a></li>
+        <li><a href="../architecture.html">Architecture</a></li>
+        <li><a href="../principles.html">Principles</a></li>
+        <li><a href="../get-started.html">Get started</a></li>
+        <li><a href="index.html" aria-current="page">Blog</a></li>
+        <li><a href="https://github.com/rudi77/authz">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="kicker">Blog</div>
+  <h1>Understanding how authz decides</h1>
+  <p class="section-intro">These articles take one concrete situation and follow it through authz. They explain why a mechanism exists, how it behaves and where its limits lie. For commands you can run immediately, start with the <a href="../get-started.html">getting-started guide</a>.</p>
+  <ul class="post-list"><li>
+    <div class="meta">2026-10-03 · agents · authz 0.2</div>
+    <h3><a href="delegating-access-to-agents.html">Giving an agent part of a user's access</a></h3>
+    <p>An assistant summarises a contract for Alice. Follow its permission checks from the overlap of user and agent roles to a delegation grant that limits the run to reading, expires after 15 minutes and is revoked mid-run.</p>
+  </li></ul>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>authz · Apache-2.0 License · <a href="https://github.com/rudi77/authz">github.com/rudi77/authz</a></div>
+    <div><a href="../features.html">Features</a> · <a href="../architecture.html">Architecture</a> · <a href="../principles.html">Principles</a> · <a href="../get-started.html">Get started</a> · <a href="index.html">Blog</a></div>
+  </div>
+</footer>
+
+<script src="../assets/site.js"></script>
+</body>
+</html>

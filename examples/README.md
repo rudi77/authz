@@ -24,6 +24,7 @@ python examples/01_quickstart_inmemory.py
 | 08 | `08_identity_providers.py` | Normalizing claims from Entra / Cognito / GCP / generic OIDC |
 | 09 | `09_fastapi_pep.py` | FastAPI route gated by `AuthzClient.require()` |
 | 10 | `10_persistence_sqlalchemy.py` | Same engine, persistent SQLite (drop-in for Postgres) |
+| 11 | `11_delegation_walkthrough.py` | Delegation grant for one agent run: narrowing, live role removal, kill switch. **Needs a running service** with admin key `dev-key` (e.g. `docker compose up`) |
 
 ## Original walk-throughs
 
