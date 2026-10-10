@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — C# SDK
+
+### New
+
+- `sdks/csharp/`: .NET 8 SDK with the same surface as Go / TypeScript
+  (`AuthzClient`, `AuthzAdminClient`, `ToolGuard`, `McpGuard`,
+  `StartAgentSessionAsync`) plus, like the Python SDK, `user_ref` /
+  `agent_name` subjects and delegation grants (`X-Delegation-Token`,
+  issue / get / revoke / kill switch / introspect,
+  `StartDelegatedAgentSessionAsync`). No dependencies beyond the BCL.
+  Covered by a new `csharp` CI job.
+
 ## Unreleased — Managed applications and declarative provisioning
 
 ### New

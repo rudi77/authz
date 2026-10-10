@@ -6,7 +6,7 @@ wraps `authzkit` and serves the same decision algorithm over REST.
 ## When to run the service
 
 - You have multiple apps that should share one PDP.
-- You have non-Python clients (Go, TypeScript, anything that speaks HTTP).
+- You have non-Python clients (Go, TypeScript, C#, anything that speaks HTTP).
 - You want the admin UI / invitation flow / audit trail without writing
   it yourself.
 - You need horizontal scale (multiple service instances behind a load

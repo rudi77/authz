@@ -9,7 +9,7 @@ they're drawn where they are.
 authzkit/         Reusable Python core library — no service, no HTTP
 authz_service/    FastAPI app that wraps authzkit
 authz_sdk/        HTTP client for the service (sync, with caching)
-sdks/{go,ts}/     Identical SDK surface in Go and TypeScript
+sdks/{go,ts,csharp}/ Identical SDK surface in Go, TypeScript and C#
 ```
 
 Each layer is consumed independently:
@@ -189,7 +189,7 @@ config. Don't branch in call sites.
 
 ## SDK parity across languages
 
-Python, Go, and TypeScript SDKs all expose:
+Python, Go, TypeScript, and C# SDKs all expose:
 
 - `AuthzClient` / `AdminClient`
 - `Subject` / `BulkCheck` data types

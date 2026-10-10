@@ -35,7 +35,7 @@ Follow-ups (🟨):
 |---|---|---|
 | Per-run agent delegation | Signed, revocable, time-boxed grants (`user ∩ agent ∩ mask ∩ grant`), opt-in `X-Delegation-Token`, kill switch, introspection + JWKS, UI panel | `authzkit/security/delegations.py`, `authz_service/api/delegations.py` |
 
-Follow-ups (🟨): Go / TypeScript SDK wrappers for the delegation endpoints;
+Follow-ups (🟨): Go / TypeScript SDK wrappers for the delegation endpoints (the C# SDK has them);
 proof-of-user at issuance (accept the user's IdP token and bind the grant
 to it, instead of trusting the runtime caller); human-in-the-loop approval
 as a third decision outcome; `from` / `to` filters on `GET /v1/audit`.
