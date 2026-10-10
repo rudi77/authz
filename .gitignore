@@ -227,3 +227,8 @@ contract/.secrets/
 
 # Consumer deployment: generated signing key and local env (see deploy/README.md)
 deploy/secrets/
+
+# C# SDK
+sdks/csharp/**/bin/
+sdks/csharp/**/obj/
+sdks/csharp/**/TestResults/

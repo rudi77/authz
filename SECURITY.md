@@ -26,7 +26,7 @@ In scope:
 
 - The HTTP service (`authz_service/`) and its REST API
 - The static admin SPA at `/admin`
-- The Python / Go / TypeScript SDKs
+- The Python / Go / TypeScript / C# SDKs
 - Storage backends shipped in this repo (SQLite, Postgres via
   SQLAlchemy, Redis-backed shared state)
 - The CLI (`authz`)
@@ -174,7 +174,7 @@ documented at `docs/api-keys.md`.
 ## Cache invalidation expectations
 
 PEP-side caches (Python SDK `cache_ttl_seconds`, Go SDK
-`EffectivePermissions` cache, in-process `ToolGuard` snapshots) are
+`EffectivePermissions` cache, C# SDK `CacheTtl`, in-process `ToolGuard` snapshots) are
 **eventually consistent** with the service. Concrete consequences:
 
 - A revoked permission may still be honoured by a PEP for up to one

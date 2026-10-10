@@ -38,7 +38,7 @@ The repo splits into three Python packages and one HTTP service:
 authzkit/        Reusable core library (PDP engine, identity, guards, storage)
 authz_service/   FastAPI service that wraps authzkit
 authz_sdk/       HTTP client for the service (sync, with caching)
-sdks/{go,ts}/    Identical SDK surface in Go and TypeScript
+sdks/{go,ts,csharp}/ Identical SDK surface in Go, TypeScript and C#
 ```
 
 Use `authzkit` directly when your app is Python and you want the engine

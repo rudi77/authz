@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>Authz.Sdk</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!-- Self-explanatory DTO members need no XML comment. -->
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <PackageId>Authz.Sdk</PackageId>
+    <Version>0.1.0</Version>
+    <Description>C# SDK for the AuthZ service</Description>
+  </PropertyGroup>
+
+</Project>

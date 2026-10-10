@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{23BC5D91-A164-4A36-ABB1-D48FD759A0C1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Authz.Sdk", "src\Authz.Sdk\Authz.Sdk.csproj", "{CD5164E0-8A63-441C-AA36-D2D9374764D5}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{BC5D6C6B-19F0-4F09-9D0C-414FA5FE02CA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Authz.Sdk.Tests", "tests\Authz.Sdk.Tests\Authz.Sdk.Tests.csproj", "{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{CD5164E0-8A63-441C-AA36-D2D9374764D5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CD5164E0-8A63-441C-AA36-D2D9374764D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CD5164E0-8A63-441C-AA36-D2D9374764D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CD5164E0-8A63-441C-AA36-D2D9374764D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{CD5164E0-8A63-441C-AA36-D2D9374764D5} = {23BC5D91-A164-4A36-ABB1-D48FD759A0C1}
+		{EA6839DB-7DEE-4E9A-85A6-0B08ECA8469F} = {BC5D6C6B-19F0-4F09-9D0C-414FA5FE02CA}
+	EndGlobalSection
+EndGlobal

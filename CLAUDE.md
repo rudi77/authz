@@ -24,6 +24,8 @@ Go SDK (`sdks/go/authz/`): `go vet ./... && go test -race -count=1 ./...`
 
 TypeScript SDK (`sdks/typescript/`): `npm install && npm run lint && npm test && npm run build`
 
+C# SDK (`sdks/csharp/`): `dotnet build -warnaserror && dotnet test`
+
 Docker / end-to-end: `docker compose up --build` brings up Postgres + Redis + service on :8080 with bootstrap key `dev-key`. Auto-runs `alembic upgrade head` before launch.
 
 In-memory demo without any infra: `python examples/contract_ai_agent.py`.
@@ -46,7 +48,7 @@ This is a Policy Decision Point (PDP), not an authenticator and not a tool runti
    - `main.py` is the app factory. Middleware stack registered in reverse runtime order: `RequestContextMiddleware` (innermost) → `RateLimitMiddleware` → `IdempotencyMiddleware` → `CORSMiddleware`.
    - `dependencies.py` is the DI hub: lazy global `_engine` / `_store`, API-key resolution, audit sink.
    - `api/` holds REST routers; `cli.py` is the `authz` CLI; `ui/` is a static admin SPA mounted at `/admin`.
-3. `authz_sdk/` — Python client (`AuthzClient`, `AuthzAdminClient`, `start_agent_session`). Re-exports `ToolGuard` / `MCPGuard` so apps don't need to import authzkit directly. `sdks/go/authz/` and `sdks/typescript/src/` mirror the same surface in their respective languages.
+3. `authz_sdk/` — Python client (`AuthzClient`, `AuthzAdminClient`, `start_agent_session`). Re-exports `ToolGuard` / `MCPGuard` so apps don't need to import authzkit directly. `sdks/go/authz/`, `sdks/typescript/src/` and `sdks/csharp/src/Authz.Sdk/` mirror the same surface in their respective languages.
 
 **Decision algorithm** (`AuthorizationEngine.authorize`, `bulk_authorize`, `effective_permissions`):
 
@@ -89,4 +91,4 @@ the guide rather than duplicating them here.
 - Repository globals (`_engine`, `_store`, `_settings`) are module-level singletons — call `reset_engine()` / `override_settings()` from tests rather than monkeypatching.
 - The Docker image runs as non-root user `authz` (uid 1000) with `tini` as PID 1; don't add anything that needs root at runtime.
 - `OPEN_ITEMS.md` is the living roadmap with explicit 🟥/🟧/🟨/🟦 status flags; consult it before proposing "missing" features — many are deliberately deferred.
-- Status: v0.2 "pilot-ready". 83 Python + 7 Go + 8 TS tests must stay green; CI runs ruff + pytest + go test + npm test + docker build + smoke test.
+- Status: v0.2 "pilot-ready". 83 Python + 7 Go + 8 TS + 29 C# tests must stay green; CI runs ruff + pytest + go test + npm test + dotnet test + docker build + smoke test.

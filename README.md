@@ -5,7 +5,7 @@ multi-tenant SaaS apps, AI agents, and MCP tool runtimes. RBAC with optional
 ABAC, multi-tenant identity normalization, agent-aware permission
 intersection, scoped API keys with rotation, invitation flow, audit
 retention, Prometheus metrics, multi-process Redis backends, and SDKs for
-Python / Go / TypeScript.
+Python / Go / TypeScript / C#.
 
 The platform answers questions like:
 
@@ -63,12 +63,13 @@ authz_service/   FastAPI Authorization Service
 authz_sdk/       Python SDK (AuthzClient + AuthzAdminClient + helpers)
 sdks/go/         Go SDK (AuthzClient + AdminClient + ToolGuard/MCPGuard)
 sdks/typescript/ TypeScript SDK (same surface, ESM, fetch-based)
+sdks/csharp/     C# SDK (same surface + delegation grants, .NET 8)
 
 migrations/      Alembic migrations (Postgres)
 loadtests/       Locust + asyncio load-test harnesses
 examples/        End-to-end usage demos
 tests/           Unit + integration tests (pytest)
-.github/         CI/CD workflows (Python/Go/TS/Docker)
+.github/         CI/CD workflows (Python/Go/TS/C#/Docker)
 ```
 
 ## Quick start (local, no Postgres)
@@ -435,8 +436,8 @@ On SQLite one is generated on first use; on Postgres set
 once (otherwise issuance returns `503 signing_key_unavailable`). Run
 `alembic upgrade head` to add the `delegation_grants` table (migration `0004`,
 additive). The admin UI has a **Delegations** panel, and the decision probe
-accepts a grant token. The Go and TypeScript SDKs don't wrap the new
-endpoints yet; they can send the header directly.
+accepts a grant token. The Python and C# SDKs wrap the new endpoints; the Go and
+TypeScript SDKs don't yet, they can send the header directly.
 
 ## Python SDK
 

@@ -125,10 +125,14 @@ go test ./...
 # TypeScript
 cd sdks/typescript
 npm install && npm test
+
+# C# (.NET 8)
+cd sdks/csharp
+dotnet test
 ```
 
-The Python, Go, and TS SDKs expose the same surface: `AuthzClient`,
-`AuthzAdminClient`, `ToolGuard`, `MCPGuard`, plus `BulkCheck` /
+The Python, Go, TS, and C# SDKs expose the same surface: `AuthzClient`,
+`AuthzAdminClient`, `ToolGuard`, `MCPGuard` (`McpGuard` in C#), plus `BulkCheck` /
 `Subject` data types.
 
 ## Next steps
