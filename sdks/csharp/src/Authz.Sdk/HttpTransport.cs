@@ -132,8 +132,9 @@ internal sealed class HttpTransport : IDisposable
                     // Transient server errors are retryable; client errors aren't.
                     continue;
                 }
-                if (status >= 400)
+                if (!response.IsSuccessStatusCode)
                 {
+                    // Includes 3xx: a caller-supplied HttpClient may not follow redirects.
                     throw new AuthzServiceException(status, text);
                 }
                 if (response.StatusCode == HttpStatusCode.NoContent || string.IsNullOrWhiteSpace(text))

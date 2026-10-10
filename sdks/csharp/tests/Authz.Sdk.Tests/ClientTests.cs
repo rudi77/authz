@@ -140,6 +140,26 @@ public class ClientTests
     }
 
     [Fact]
+    public async Task CacheKey_DelimitersInValues_DoNotCollide()
+    {
+        var h = new MockHandler(_ => (200, """{"permissions": []}"""));
+        using var client = NewClient(h, TimeSpan.FromMinutes(1));
+        Subject Ref(string subject, string agentName) => new()
+        {
+            Type = SubjectTypes.Agent,
+            UserRef = new UserRef("entra", "https://iss", subject),
+            AgentName = agentName,
+        };
+        var req = new EffectivePermissionsRequest { TenantId = "t", ApplicationId = "a", Subject = Ref("u:x", "y") };
+
+        await client.GetEffectivePermissionsAsync(req);
+        await client.GetEffectivePermissionsAsync(req with { Subject = Ref("u", "x:y") });
+        await client.GetEffectivePermissionsAsync(req with { TenantId = "t|a", ApplicationId = "" });
+
+        Assert.Equal(3, h.Calls);
+    }
+
+    [Fact]
     public async Task InvalidateCache_DropsMatchingPartitionOnly()
     {
         var h = new MockHandler(_ => (200, """{"permissions": []}"""));
@@ -206,6 +226,18 @@ public class ClientTests
         Assert.Equal(403, e.StatusCode);
         Assert.Equal("tenant_scope_mismatch", e.ErrorCode);
         Assert.Contains("tenant_scope_mismatch", e.Body);
+        Assert.Equal(1, h.Calls);
+    }
+
+    [Fact]
+    public async Task Redirect_IsNotTreatedAsSuccess()
+    {
+        var h = new MockHandler(_ => (302, ""));
+        using var client = NewClient(h);
+
+        var e = await Assert.ThrowsAsync<AuthzServiceException>(() => client.AuthorizeAsync(Req()));
+
+        Assert.Equal(302, e.StatusCode);
         Assert.Equal(1, h.Calls);
     }
 

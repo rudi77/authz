@@ -6,6 +6,7 @@
 
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 
 namespace Authz.Sdk;
 
@@ -205,20 +206,19 @@ public sealed class AuthzClient : IDisposable
 
     private static string CacheKey(EffectivePermissionsRequest r)
     {
+        // Every component can be caller-controlled (names, IdP subjects), so the
+        // key is a JSON array: no delimiter inside a value can make two
+        // different subjects collide. A grant narrows the set, so it partitions
+        // the cache too (hashed, the token itself is not kept).
         var s = r.Subject;
-        var sb = new StringBuilder()
-            .Append(r.TenantId).Append('|').Append(r.ApplicationId).Append('|')
-            .Append(s.Type).Append(':').Append(s.UserId).Append(':').Append(s.AgentId)
-            .Append(':').Append(s.ServiceAccountId).Append(':')
-            .Append(s.UserRef is null ? "" : $"{s.UserRef.Provider}\u001f{s.UserRef.Issuer}\u001f{s.UserRef.Subject}")
-            .Append(':').Append(s.AgentName);
-        if (!string.IsNullOrEmpty(r.DelegationToken))
+        string? grant = string.IsNullOrEmpty(r.DelegationToken)
+            ? null
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(r.DelegationToken)));
+        return JsonSerializer.Serialize(new[]
         {
-            // A grant narrows the set, so it must partition the cache too.
-            var hash = SHA256.HashData(Encoding.UTF8.GetBytes(r.DelegationToken));
-            sb.Append(":d=").Append(Convert.ToHexString(hash)[..24]);
-        }
-        return sb.ToString();
+            r.TenantId, r.ApplicationId, s.Type, s.UserId, s.AgentId, s.ServiceAccountId,
+            s.UserRef?.Provider, s.UserRef?.Issuer, s.UserRef?.Subject, s.AgentName, grant,
+        });
     }
 
     private bool TryGetCached(string key, out IReadOnlySet<string> permissions)

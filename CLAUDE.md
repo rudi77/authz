@@ -91,4 +91,4 @@ the guide rather than duplicating them here.
 - Repository globals (`_engine`, `_store`, `_settings`) are module-level singletons — call `reset_engine()` / `override_settings()` from tests rather than monkeypatching.
 - The Docker image runs as non-root user `authz` (uid 1000) with `tini` as PID 1; don't add anything that needs root at runtime.
 - `OPEN_ITEMS.md` is the living roadmap with explicit 🟥/🟧/🟨/🟦 status flags; consult it before proposing "missing" features — many are deliberately deferred.
-- Status: v0.2 "pilot-ready". 83 Python + 7 Go + 8 TS + 27 C# tests must stay green; CI runs ruff + pytest + go test + npm test + dotnet test + docker build + smoke test.
+- Status: v0.2 "pilot-ready". 83 Python + 7 Go + 8 TS + 29 C# tests must stay green; CI runs ruff + pytest + go test + npm test + dotnet test + docker build + smoke test.
